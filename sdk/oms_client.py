@@ -1,10 +1,10 @@
 """
-OMS客户端SDK
+OMS Client SDK
 
-基于requests库封装的OMS服务客户端，提供完整的API接口调用功能。
-从环境变量读取OMS_URL和OMS_ACCESS_TOKEN配置。
+A requests-based OMS service client that provides complete API interface functionality.
+Reads OMS_URL and OMS_ACCESS_TOKEN configuration from environment variables.
 
-使用示例:
+Usage example:
     >>> from sdk.oms_client import OmsClient
     >>> client = OmsClient()
     >>> balances = client.get_balance()
@@ -28,39 +28,39 @@ logger = logging.getLogger(__name__)
 
 
 class OmsError(Exception):
-    """OMS SDK异常基类"""
+    """OMS SDK base exception class"""
     pass
 
 
 class AuthenticationError(OmsError):
-    """认证错误"""
+    """Authentication error"""
     pass
 
 
 class ApiError(OmsError):
-    """API调用错误"""
+    """API call error"""
     pass
 
 
 class RateLimitError(OmsError):
-    """速率限制错误"""
+    """Rate limit error"""
     pass
 
 
 class ConfigurationError(OmsError):
-    """配置错误"""
+    """Configuration error"""
     pass
 
 
 class OmsClient:
     """
-    OMS SDK客户端
+    OMS SDK Client
     
-    从环境变量读取配置:
-    - OMS_URL: OMS服务基础URL
-    - OMS_ACCESS_TOKEN: Bearer认证令牌
+    Reads configuration from environment variables:
+    - OMS_URL: OMS service base URL
+    - OMS_ACCESS_TOKEN: Bearer authentication token
     
-    使用示例:
+    Usage example:
         >>> client = OmsClient()
         >>> balances = client.get_balance()
         >>> positions = client.get_position()
@@ -69,29 +69,29 @@ class OmsClient:
     
     def __init__(self, base_url: Optional[str] = None, access_token: Optional[str] = None, timeout: int = 30):
         """
-        初始化OMS客户端
+        Initialize OMS client
         
         Args:
-            base_url: OMS服务基础URL，如果不提供则从环境变量OMS_URL读取
-            access_token: Bearer认证令牌，如果不提供则从环境变量OMS_ACCESS_TOKEN读取
-            timeout: 请求超时时间（秒）
+            base_url: OMS service base URL, if not provided, reads from OMS_URL environment variable
+            access_token: Bearer authentication token, if not provided, reads from OMS_ACCESS_TOKEN environment variable
+            timeout: Request timeout time (seconds)
             
         Raises:
-            ConfigurationError: 配置缺失或无效
+            ConfigurationError: Missing or invalid configuration
         """
 
-        # 从环境变量或参数获取配置
+        # Get configuration from environment variables or parameters
         self.base_url = (base_url or os.getenv('OMS_URL', '')).rstrip('/')
         self.access_token = access_token or os.getenv('OMS_ACCESS_TOKEN', '')
         self.timeout = timeout
         
-        # 验证配置
+        # Validate configuration
         if not self.base_url:
             raise ConfigurationError("OMS_URL environment variable or base_url parameter is required")
         if not self.access_token:
             raise ConfigurationError("OMS_ACCESS_TOKEN environment variable or access_token parameter is required")
         
-        # 初始化HTTP会话
+        # Initialize HTTP session
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'Bearer {self.access_token}',
@@ -102,20 +102,20 @@ class OmsClient:
     
     def _make_request(self, method: str, endpoint: str, params: Optional[Dict] = None, data: Optional[Dict] = None, raw=False) -> Dict[str, Any]:
         """
-        发送HTTP请求
+        Send HTTP request
         
         Args:
-            method: HTTP方法（GET/POST/PUT/DELETE）
-            endpoint: API端点
-            data: 请求数据
+            method: HTTP method (GET/POST/PUT/DELETE)
+            endpoint: API endpoint
+            data: Request data
             
         Returns:
-            响应数据字典
+            Response data dictionary
             
         Raises:
-            AuthenticationError: 认证失败
-            RateLimitError: 速率限制
-            ApiError: 其他API错误
+            AuthenticationError: Authentication failed
+            RateLimitError: Rate limit exceeded
+            ApiError: Other API errors
         """
         url = f"{self.base_url}{endpoint}"
         prepared = requests.Request(method=method, url=url, params=params, json=data, headers=self.session.headers).prepare()
@@ -124,7 +124,7 @@ class OmsClient:
             if raw:
                 return response
         
-            # 处理响应状态码
+            # Handle response status codes
             if response.status_code == 401:
                 raise AuthenticationError("Authentication failed. Please check your access token.")
             elif response.status_code == 429:
@@ -141,7 +141,7 @@ class OmsClient:
                     error_msg = f"{error_msg} - {response.text}"
                 raise ApiError(error_msg)
             
-            # 解析JSON响应
+            # Parse JSON response
             try:
                 return response.json()
             except json.JSONDecodeError:
@@ -157,20 +157,20 @@ class OmsClient:
     def set_target_position(self, instrument_name: str, instrument_type: str, 
                           target_value: float, position_side: str) -> Dict[str, Any]:
         """
-        设置目标持仓
+        Set target position
         
         Args:
-            instrument_name: 交易对名称，如 "BTC-USDT"
-            instrument_type: 交易类型，"future" 或 "spot"
-            target_value: 目标持仓价值(USDT)
-            position_side: 持仓方向，"LONG" 或 "SHORT"
+            instrument_name: Trading pair name, e.g. "BTC-USDT"
+            instrument_type: Trading type, "future" or "spot"
+            target_value: Target position value (USDT)
+            position_side: Position direction, "LONG" or "SHORT"
             
         Returns:
-            设置结果响应字典，包含任务ID等信息
+            Setting result response dictionary, containing task ID and other information
             
         Raises:
-            ApiError: API调用失败
-            RateLimitError: 操作过于频繁
+            ApiError: API call failed
+            RateLimitError: Operation too frequent
         """
         data = {
             "instrument_name": instrument_name,
@@ -195,21 +195,21 @@ class OmsClient:
 
     def set_target_position_batch(self, elements: List) -> Dict[str, Any]:
         """
-        批量设置目标持仓
+        Batch set target positions
 
         Args:
-            elements: 包含多个目标持仓设置的字典列表，每个字典包含以下字段：
-                - instrument_name: 交易对名称，如 "BTC-USDT"
-                - instrument_type: 交易类型，"future" 或 "spot"
-                - target_value: 目标持仓价值(USDT)
-                - position_side: 持仓方向，"LONG" 或 "SHORT"
+            elements: List of dictionaries containing multiple target position settings, each dictionary contains the following fields:
+                - instrument_name: Trading pair name, e.g. "BTC-USDT"
+                - instrument_type: Trading type, "future" or "spot"
+                - target_value: Target position value (USDT)
+                - position_side: Position direction, "LONG" or "SHORT"
 
         Returns:
-            设置结果响应字典，包含任务ID等信息
+            Setting result response dictionary, containing task ID and other information
 
         Raises:
-            ApiError: API调用失败
-            RateLimitError: 操作过于频繁
+            ApiError: API call failed
+            RateLimitError: Operation too frequent
         """
 
         try:
@@ -228,13 +228,13 @@ class OmsClient:
 
     def get_position(self) -> List[Dict[str, Any]]:
         """
-        获取用户持仓列表
+        Get user position list
         
         Returns:
             持仓信息列表，每个元素包含交易对、持仓方向、数量、���值等信息
             
         Raises:
-            ApiError: API调用失败
+            ApiError: API call failed
         """
         try:
             response = self._make_request('GET', '/api/binance/get-position')
@@ -253,13 +253,13 @@ class OmsClient:
 
     def get_balance(self) -> List[Dict[str, Any]]:
         """
-        获取用户资产列表
+        Get user asset list
         
         Returns:
-            资产信息列表，每个元素包含资产类型、余额等信息
+            Asset information list, each element contains asset type, balance and other information
             
         Raises:
-            ApiError: API调用失败
+            ApiError: API call failed
         """
         try:
             response = self._make_request('GET', '/api/binance/get-balance')
@@ -278,13 +278,13 @@ class OmsClient:
 
     def get_asset_changes(self) -> List[Dict[str, Any]]:
         """
-        获取用户资产变更历史
+        Get user asset change history
         
         Returns:
-            资产变更记录列表，包含最近100条变更记录
+            Asset change record list, containing the latest 100 change records
             
         Raises:
-            ApiError: API调用失败
+            ApiError: API call failed
         """
         try:
             response = self._make_request('GET', '/api/binance/get-asset-changes')
@@ -303,13 +303,13 @@ class OmsClient:
 
     def get_symbols(self) -> List[str]:
         """
-        获取可交易合约列表
+        Get tradable contract list
         
         Returns:
-            可交易合约列表
+            Tradable contract list
 
         Raises:
-            ApiError: API调用失败
+            ApiError: API call failed
         """
         try:
             response = self._make_request('GET', '/api/market/symbols')
@@ -328,17 +328,17 @@ class OmsClient:
 
     def create_strategy_user(self, name: str) -> Dict[str, str]:
         """
-        创建策略用户（需要qb-backend权限）
+        Create strategy user (requires qb-backend permissions)
         
         Args:
-            name: 用户名
+            name: Username
             
         Returns:
-            包含用户名和token的字典
+            Dictionary containing username and token
             
         Raises:
-            ApiError: API调用失败
-            AuthenticationError: 权限不足
+            ApiError: API call failed
+            AuthenticationError: Insufficient permissions
         """
         data = {"name": name}
         
@@ -357,81 +357,81 @@ class OmsClient:
 
 
     def close(self):
-        """关闭客户端连接"""
+        """Close client connection"""
         if self.session:
             self.session.close()
         logger.info("OmsClient closed")
 
     def __enter__(self):
-        """上下文管理器入口"""
+        """Context manager entry"""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器出口"""
+        """Context manager exit"""
         self.close()
 
 
-# 便捷函数
+# Convenience function
 def create_client(base_url: Optional[str] = None, access_token: Optional[str] = None) -> OmsClient:
     """
-    创建OMS客户端实例
+    Create OMS client instance
     
     Args:
-        base_url: OMS服务基础URL，如果不提供则从环境变量OMS_URL读取
-        access_token: Bearer认证令牌，如果不提供则从环境变量OMS_ACCESS_TOKEN读取
+        base_url: OMS service base URL, if not provided, reads from OMS_URL environment variable
+        access_token: Bearer authentication token, if not provided, reads from OMS_ACCESS_TOKEN environment variable
         
     Returns:
-        OmsClient实例
+        OmsClient instance
     """
     return OmsClient(base_url=base_url, access_token=access_token)
 
 
-# 示例用法
+# Example usage
 if __name__ == "__main__":
-    # 设置日志
+    # Set up logging
     logging.basicConfig(level=logging.INFO)
     
     try:
-        # 创建客户端（从环境变量读取配置）
+        # Create client (read configuration from environment variables)
         client = OmsClient()
         
-        # 获取账户信息
-        print("=== 获取资产余额 ===")
+        # Get account information
+        print("=== Get Asset Balances ===")
         balances = client.get_balance()
         for balance in balances:
-            print(f"资产: {balance['asset']}, 余额: {balance['balance']}")
+            print(f"Asset: {balance['asset']}, Balance: {balance['balance']}")
         
-        print("\n=== 获取持仓信息 ===")
+        print("\n=== Get Position Information ===")
         positions = client.get_position()
         for position in positions:
-            print(f"交易对: {position['instrument_name']}, "
-                  f"方向: {position['position_side']}, "
-                  f"数量: {position['quantity']}, "
-                  f"价值: {position['value']}")
+            print(f"Trading Pair: {position['instrument_name']}, "
+                  f"Direction: {position['position_side']}, "
+                  f"Quantity: {position['quantity']}, "
+                  f"Value: {position['value']}")
         
-        print("\n=== 获取资产变更历史 ===")
+        print("\n=== Get Asset Change History ===")
         changes = client.get_asset_changes()
-        for change in changes[:5]:  # 只显示前5条
-            print(f"资产: {change['asset']}, "
-                  f"变动: {change['change']}, "
-                  f"余额: {change['balance']}, "
-                  f"时间: {change['create_time']}")
+        for change in changes[:5]:  # Only show first 5 records
+            print(f"Asset: {change['asset']}, "
+                  f"Change: {change['change']}, "
+                  f"Balance: {change['balance']}, "
+                  f"Time: {change['create_time']}")
         
-        # 设置目标仓位示例（注释掉避免意外执行）
-        print("\n=== 设置目标仓位 ===")
+        # Set target position example (commented out to avoid accidental execution)
+        print("\n=== Set Target Position ===")
         result = client.set_target_position(
             instrument_name="BTC-USDT",
             instrument_type="future",
             target_value=100,
             position_side="LONG"
         )
-        print(f"任务ID: {result['id']}")
+        print(f"Task ID: {result['id']}")
         
     except ConfigurationError as e:
-        print(f"配置错误: {e}")
-        print("请设置环境变量 OMS_URL 和 OMS_ACCESS_TOKEN")
+        print(f"Configuration error: {e}")
+        print("Please set environment variables OMS_URL and OMS_ACCESS_TOKEN")
     except Exception as e:
-        print(f"错误: {e}")
+        print(f"Error: {e}")
     
     import time
     while True:
