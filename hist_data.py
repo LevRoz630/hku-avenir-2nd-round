@@ -125,7 +125,7 @@ class HistoricalDataCollector:
                 start_time = end_time - timedelta(days=self.years * 365)
                 
                 # Fetch funding rate history
-                funding_rates = self.exchange.fetch_funding_rate_history(
+                funding_rates = self.exchange.fetch_funding_rate(
                     ccxt_symbol, 
                     since=int(start_time.timestamp() * 1000),
                     limit=1000
