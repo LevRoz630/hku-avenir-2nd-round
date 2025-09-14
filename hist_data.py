@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Historical Data Collector - Fetches comprehensive historical data for multiple years
+Historical Data Collector - Fetches comprehensive historical data for multiple days
 Collects: OHLCV, funding rates, open interest, trades, and more for extended periods
 """
 
@@ -19,11 +19,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class HistoricalDataCollector:
-    def __init__(self, data_dir="historical_data", years=None):
+    def __init__(self, data_dir="historical_data", days=None):
         """Initialize historical data collector"""
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
-        self.years = years
+        self.days = days
         
         # Initialize Binance exchange
         self.exchange = binance_sync({
@@ -32,14 +32,14 @@ class HistoricalDataCollector:
             'options': {'defaultType': 'future'}
         })
         
-        logger.info(f"Historical Data Collector initialized for {years} years")
+        logger.info(f"Historical Data Collector initialized for {days} days")
     
     def collect_historical_ohlcv(self, symbols, timeframe='15m'):
-        """Collect historical OHLCV data for multiple years"""
+        """Collect historical OHLCV data for multiple days"""
         logger.info(f"Collecting historical OHLCV data ({timeframe}) for {len(symbols)} symbols...")
         
         end_time = datetime.now()
-        start_time = end_time - timedelta(days=self.years * 365)
+        start_time = end_time - timedelta(days=self.days)
         
         # Calculate periods per day based on timeframe
         if timeframe == '1h':
@@ -51,7 +51,7 @@ class HistoricalDataCollector:
         else:
             periods_per_day = 96
         
-        total_periods = self.years * 365 * periods_per_day
+        total_periods = self.days * periods_per_day
         max_records_per_request = 1000  # Binance limit
         num_batches = (total_periods + max_records_per_request - 1) // max_records_per_request
         
@@ -71,7 +71,7 @@ class HistoricalDataCollector:
                 for batch in range(num_batches):
                     try:
                         # Calculate time range for this batch
-                        batch_days = min(self.years * 365, max_records_per_request / periods_per_day)
+                        batch_days = min(self.days, max_records_per_request / periods_per_day)
                         batch_start_time = current_end_time - timedelta(days=batch_days)
                         since = int(batch_start_time.timestamp() * 1000)
                         
@@ -100,7 +100,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save individual symbol data
-                    filename = f"{symbol}_{timeframe}_{self.years}y.csv"
+                    filename = f"{symbol}_{timeframe}_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} records to {filename}")
                 else:
@@ -110,7 +110,7 @@ class HistoricalDataCollector:
                 logger.error(f"Failed to collect {symbol}: {e}")
     
     def collect_historical_funding_rates(self, symbols):
-        """Collect historical funding rates for multiple years"""
+        """Collect historical funding rates for multiple days"""
         logger.info(f"Collecting historical funding rates for {len(symbols)} symbols...")
         
         for symbol in symbols:
@@ -122,13 +122,13 @@ class HistoricalDataCollector:
                 
                 # Calculate time range
                 end_time = datetime.now()
-                start_time = end_time - timedelta(days=self.years * 365)
+                start_time = end_time - timedelta(days=self.days)
                 
                 # Fetch funding rate history
                 funding_rates = self.exchange.fetch_funding_rate_history(
                     ccxt_symbol, 
                     since=int(start_time.timestamp() * 1000),
-                    limit=1000
+                    limit=1000,
                 )
                 
                 if funding_rates:
@@ -149,7 +149,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save funding rates
-                    filename = f"{symbol}_funding_rates_{self.years}y.csv"
+                    filename = f"{symbol}_funding_rates_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} funding rate records to {filename}")
                 else:
@@ -159,7 +159,8 @@ class HistoricalDataCollector:
                 
             except Exception as e:
                 logger.error(f"Failed to collect funding rates for {symbol}: {e}")
-    def collect_historical_open_interest(self, symbols):
+
+    def collect_historical_open_interest(self, symbols, timeframe='5m'):
         """Collect historical open interest data with proper API rate limiting"""
         logger.info(f"Collecting historical open interest for {len(symbols)} symbols...")
         
@@ -169,97 +170,36 @@ class HistoricalDataCollector:
                 ccxt_symbol = f"{base}/USDT"
                 
                 logger.info(f"Collecting open interest for {symbol}...")
-                
+                all_open_interest = []
+                batch_size = 500
                 # Calculate time range - use shorter period to respect API limits
                 end_time = datetime.now()
-                start_time = end_time - timedelta(days=self.years * 365)
-                
-                all_open_interest = []
-                current_start_time = start_time
-                batch_count = 0
-                consecutive_errors = 0
-                max_consecutive_errors = 3
-                
-                # Collect open interest in batches until we reach the end
-                while current_start_time < end_time: # Reduced safety limit
-                    try:
-                        logger.info(f"  Fetching batch {batch_count + 1} from {current_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                        
-                        # Add exponential backoff for rate limiting
-                        if batch_count > 0:
-                            sleep_time = min(1.0 + (batch_count * 0.1), 5.0)  # Max 5 seconds
-                            logger.info(f"  Rate limiting: sleeping {sleep_time:.1f}s")
-                            time.sleep(sleep_time)
-                        
-                        open_interest = self.exchange.fetch_open_interest_history(
-                            ccxt_symbol,
-                            since=int(current_start_time.timestamp() * 1000),
-                            limit=1000  # Reduced limit to avoid API errors
+                start_time = end_time - timedelta(days=self.days)
+                while start_time < end_time:
+
+                    print(start_time)
+                    open_interest = self.exchange.fetch_open_interest_history(
+                        ccxt_symbol,
+                        since=int(start_time.timestamp() * 1000),
+                        limit=batch_size,
+                        timeframe=timeframe# Reduced limit to avoid API errors
                         )
                         
-                        if not open_interest:
-                            logger.info(f"  No more data available")
-                            break
-                        
-                        all_open_interest.extend(open_interest)
-                        logger.info(f"  Fetched {len(open_interest)} records (total: {len(all_open_interest)})")
-                        
-                        # Reset error counter on successful fetch
-                        consecutive_errors = 0
-                        
-                        # Update start time to the last record's timestamp + 1 minute
-                        last_timestamp = open_interest[-1].get('timestamp', 0)
-                        if last_timestamp:
-                            current_start_time = datetime.fromtimestamp(last_timestamp / 1000) + timedelta(minutes=1)
-                        else:
-                            break
-                        
-                        batch_count += 1
-                        
-                    except Exception as api_error:
-                        consecutive_errors += 1
-                        error_msg = str(api_error)
-                        
-                        logger.warning(f"  API error for batch {batch_count + 1} (attempt {consecutive_errors}): {error_msg}")
-                        
-                        # Handle specific API errors
-                        if "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
-                            logger.warning(f"  Rate limit hit, sleeping 10 seconds...")
-                            time.sleep(10)
-                        elif "invalid" in error_msg.lower() and "startTime" in error_msg:
-                            logger.warning(f"  Invalid startTime, trying without since parameter...")
-                            try:
-                                open_interest = self.exchange.fetch_open_interest_history(
-                                    ccxt_symbol,
-                                    limit=1000
-                                )
-                                if open_interest:
-                                    all_open_interest.extend(open_interest)
-                                    logger.info(f"  Fetched {len(open_interest)} records without since parameter")
-                                    
-                                    # Update start time to the last record's timestamp + 1 minute
-                                    last_timestamp = open_interest[-1].get('timestamp', 0)
-                                    if last_timestamp:
-                                        current_start_time = datetime.fromtimestamp(last_timestamp / 1000) + timedelta(minutes=1)
-                                    
-                                    batch_count += 1
-                                    consecutive_errors = 0
-                            except Exception as e2:
-                                logger.error(f"  Failed without since parameter: {e2}")
-                                break
-                        elif consecutive_errors >= max_consecutive_errors:
-                            logger.error(f"  Too many consecutive errors ({consecutive_errors}), stopping")
-                            break
-                        else:
-                            # Exponential backoff for other errors
-                            backoff_time = min(2 ** consecutive_errors, 30)
-                            logger.warning(f"  Backing off for {backoff_time} seconds...")
-                            time.sleep(backoff_time)
-                        
-                        # If we've had too many errors, break
-                        if consecutive_errors >= max_consecutive_errors:
-                            break
-                
+                    if not open_interest:
+                        logger.info(f"  No more data available")
+                        break
+                    
+                    all_open_interest.extend(open_interest)
+                    
+                    # Or if you want to use the timeframe parameter
+                    if timeframe == '5m':
+                        start_time = start_time + timedelta(minutes=5 * batch_size)
+                    elif timeframe == '15m':
+                        start_time = start_time + timedelta(minutes=15 * batch_size)
+                    else:
+                        print("timeframe not alligned with time shift, go fix it")
+                    logger.info(f"  Fetched {len(open_interest)} records (total: {len(all_open_interest)})")
+                    
                 if all_open_interest:
                     # Process open interest data properly
                     processed_data = []
@@ -277,7 +217,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save open interest
-                    filename = f"{symbol}_open_interest_{self.years}y.csv"
+                    filename = f"{symbol}_open_interest_{self.days}d_{timeframe}.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} open interest records to {filename}")
                 else:
@@ -291,7 +231,7 @@ class HistoricalDataCollector:
 
     def collect_historical_trades(self, symbols):
         """Collect historical trades data (limited to recent period due to API limits)"""
-        logger.info(f"Collecting historical trades for {len(symbols)} symbols (last {self.years} years)...")
+        logger.info(f"Collecting historical trades for {len(symbols)} symbols (last {self.days} days)...")
         
         for symbol in symbols:
             try:
@@ -302,27 +242,29 @@ class HistoricalDataCollector:
                 
                 # Calculate time range (limited to recent period)
                 end_time = datetime.now()
-                start_time = end_time - timedelta(days=self.years * 365)
+                start_time = end_time - timedelta(days=self.days)
                 
                 all_trades = []
                 current_end_time = end_time
                 
                 # Collect trades in batches
-                for batch in range(1000):  # Limit to 10 batches
+                while start_time < end_time:
                     try:
                         since = int(start_time.timestamp() * 1000)
                         trades = self.exchange.fetch_trades(ccxt_symbol, since=since, limit=1000)
                         
                         if trades:
                             all_trades.extend(trades)
-                            logger.info(f"  Batch {batch+1}: {len(trades)} trades")
+                            logger.info(f"  Batch {start_time}: {len(trades)} trades")
+                            trades_time = trades[-1].get('timestamp')
+                            start_time = datetime.fromtimestamp(trades_time/1000)
                         else:
                             break
                         
                         time.sleep(0.5)  # Rate limiting
                         
                     except Exception as e:
-                        logger.error(f"  Error in trades batch {batch+1}: {e}")
+                        logger.error(f"  Error in trades batch {start_time}: {e}")
                         break
                 
                 if all_trades:
@@ -345,7 +287,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save trades
-                    filename = f"{symbol}_trades_{self.years}y.csv"
+                    filename = f"{symbol}_trades_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} trade records to {filename}")
                 else:
@@ -371,7 +313,7 @@ class HistoricalDataCollector:
         
         # Collect open interest
         logger.info(f"\n=== Collecting Open Interest ===")
-        self.collect_historical_open_interest(symbols)
+        self.collect_historical_open_interest(symbols, timeframe)
         
         # Collect trades (limited period)
         if include_trades:
@@ -388,7 +330,7 @@ class HistoricalDataCollector:
             'duration_minutes': duration.total_seconds() / 60,
             'symbols_processed': len(symbols),
             'timeframes_collected': timeframes,
-            'years_covered': self.years,
+            'days_covered': self.days,
             'files_created': len(list(self.data_dir.glob('*.csv'))),
             'data_directory': str(self.data_dir)
         }
@@ -403,44 +345,3 @@ class HistoricalDataCollector:
         logger.info(f"Data directory: {self.data_dir}")
         
         return summary
-
-def main():
-    """Demo function for historical data collection"""
-    
-    # Sample symbols for 1 year test
-    sample_symbols = [
-        "BTC-USDT-PERP",
-        "ETH-USDT-PERP", 
-        # "SOL-USDT-PERP",
-        # "ORDI-USDT-PERP"
-    ]
-    
-    # Initialize collector for 1 year of data
-    collector = HistoricalDataCollector("historical_data_1y", years=0.1)
-    
-    print("=== Historical Data Collection Demo (1 Year) ===")
-    print(f"Collecting data for: {', '.join(sample_symbols)}")
-    print(f"Time period: 1 year")
-    print(f"Data will be saved to: {collector.data_dir}")
-    print()
-    
-    try:
-        # Collect all historical data
-        summary = collector.collect_all_historical_data(
-            symbols=sample_symbols,
-            timeframes=['15m'],  # Multiple timeframes
-            include_trades=True
-        )
-        
-        print("\n=== Collection Summary ===")
-        for key, value in summary.items():
-            print(f"{key}: {value}")
-        
-        print(f"\nFiles saved to: {collector.data_dir}")
-        print("Check the CSV files for detailed historical data!")
-        
-    except Exception as e:
-        logger.error(f"Collection failed: {e}")
-
-if __name__ == "__main__":
-    main()
