@@ -19,26 +19,41 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class HistoricalDataCollector:
-    def __init__(self, data_dir="historical_data", days=None, type = None):
+    def __init__(self, data_dir="historical_data", days=None, type = None, symbols = None):
         """Initialize historical data collector"""
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.days = days
         self.type = type
-        if self.type is None:
-            raise ValueError("type is required future or spot")
-        # Initialize Binance exchange
+        self.symbols = symbols
+
         self.exchange = binance_sync({
             'sandbox': False,
             'enableRateLimit': True,
             'options': {'defaultType': self.type}
         })
         
+
+        if self.type is None:
+            raise ValueError("type is required future or spot")
+        # Initialize Binance exchange
+# Validate symbol format based on trading type
+        if self.type == "spot" and any('-USDT-PERP' in s for s in self.symbols):
+            futures_symbols = [s for s in self.symbols if '-USDT-PERP' in s]
+            raise ValueError(f"don't use futures format on spot, dumbass: {futures_symbols}")
+
+        if self.type == "future" and any('-' in s and '-USDT-PERP' not in s for s in self.symbols):
+            spot_symbols = [s for s in self.symbols if '-' in s and '-USDT-PERP' not in s]
+            raise ValueError(f"use proper futures format, dumbass: {spot_symbols}")
+
+            
+
         logger.info(f"Historical Data Collector initialized for {days} days")
     
-    def collect_historical_ohlcv(self, symbols, timeframe='15m'):
+    def collect_historical_ohlcv(self, timeframe='15m'):
         """Collect historical OHLCV data for multiple days"""
-        logger.info(f"Collecting historical OHLCV data ({timeframe}) for {len(symbols)} symbols...")
+
+        logger.info(f"Collecting historical OHLCV data ({timeframe}) for {len(self.symbols)} symbols...")
         
         end_time = datetime.now()
         start_time = end_time - timedelta(days=self.days)
@@ -60,7 +75,7 @@ class HistoricalDataCollector:
         logger.info(f"Total periods needed: {total_periods:,}")
         logger.info(f"Number of batches: {num_batches}")
         
-        for symbol in symbols:
+        for symbol in self.symbols:
             try:
                 base = symbol.split('-')[0]
                 ccxt_symbol = f"{base}/USDT"
@@ -111,13 +126,13 @@ class HistoricalDataCollector:
             except Exception as e:
                 logger.error(f"Failed to collect {symbol}: {e}")
     
-    def collect_historical_funding_rates(self, symbols):
+    def collect_historical_funding_rates(self):
         if self.type == "spot":
             raise ValueError("spot does not have funding rates dumbass")
         """Collect historical funding rates for multiple days"""
-        logger.info(f"Collecting historical funding rates for {len(symbols)} symbols...")
+        logger.info(f"Collecting historical funding rates for {len(self.symbols)} symbols...")
         
-        for symbol in symbols:
+        for symbol in self.symbols:
             try:
                 base = symbol.split('-')[0]
                 ccxt_symbol = f"{base}/USDT"
@@ -164,13 +179,13 @@ class HistoricalDataCollector:
             except Exception as e:
                 logger.error(f"Failed to collect funding rates for {symbol}: {e}")
 
-    def collect_historical_open_interest(self, symbols, timeframe='5m'):
+    def collect_historical_open_interest(self, timeframe='5m'):
         if self.type == "spot":
             raise ValueError("spot does not have open interest dumbass")
         """Collect historical open interest data with proper API rate limiting"""
-        logger.info(f"Collecting historical open interest for {len(symbols)} symbols...")
+        logger.info(f"Collecting historical open interest for {len(self.symbols)} symbols...")
         
-        for symbol in symbols:
+        for symbol in self.symbols:
             try:
                 base = symbol.split('-')[0]
                 ccxt_symbol = f"{base}/USDT"
@@ -198,12 +213,25 @@ class HistoricalDataCollector:
                     all_open_interest.extend(open_interest)
                     
                     # Or if you want to use the timeframe parameter
-                    if timeframe == '5m':
-                        start_time = start_time + timedelta(minutes=5 * batch_size)
-                    elif timeframe == '15m':
-                        start_time = start_time + timedelta(minutes=15 * batch_size)
+                    # Timeframe to timedelta mapping
+                    timeframe_deltas = {
+                        '5m': timedelta(minutes=5),
+                        '15m': timedelta(minutes=15),
+                        '30m': timedelta(minutes=30),
+                        '1h': timedelta(hours=1),
+                        '2h': timedelta(hours=2),
+                        '4h': timedelta(hours=4),
+                        '6h': timedelta(hours=6),
+                        '12h': timedelta(hours=12),
+                        '1d': timedelta(days=1)
+                    }
+
+                    # Apply the timeframe shift
+                    if timeframe in timeframe_deltas:
+                        start_time = start_time + (timeframe_deltas[timeframe] * batch_size)
                     else:
-                        print("timeframe not alligned with time shift, go fix it")
+                        raise ValueError(f"Unsupported timeframe got fix it : {timeframe}")
+
                     logger.info(f"  Fetched {len(open_interest)} records (total: {len(all_open_interest)})")
                     
                 if all_open_interest:
@@ -235,11 +263,11 @@ class HistoricalDataCollector:
             except Exception as e:
                 logger.error(f"Failed to collect open interest for {symbol}: {e}")
 
-    def collect_historical_trades(self, symbols):
+    def collect_historical_trades(self):
         """Collect historical trades data (limited to recent period due to API limits)"""
-        logger.info(f"Collecting historical trades for {len(symbols)} symbols (last {self.days} days)...")
+        logger.info(f"Collecting historical trades for {len(self.symbols)} symbols (last {self.days} days)...")
         
-        for symbol in symbols:
+        for symbol in self.symbols:
             try:
                 base = symbol.split('-')[0]
                 ccxt_symbol = f"{base}/USDT"
