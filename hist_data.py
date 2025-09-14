@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class HistoricalDataCollector:
-    def __init__(self, data_dir="historical_data", years=2):
+    def __init__(self, data_dir="historical_data", years=None):
         """Initialize historical data collector"""
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
@@ -125,7 +125,7 @@ class HistoricalDataCollector:
                 start_time = end_time - timedelta(days=self.years * 365)
                 
                 # Fetch funding rate history
-                funding_rates = self.exchange.fetch_funding_rate(
+                funding_rates = self.exchange.fetch_funding_rate_history(
                     ccxt_symbol, 
                     since=int(start_time.timestamp() * 1000),
                     limit=1000
@@ -159,9 +159,8 @@ class HistoricalDataCollector:
                 
             except Exception as e:
                 logger.error(f"Failed to collect funding rates for {symbol}: {e}")
-    
     def collect_historical_open_interest(self, symbols):
-        """Collect historical open interest data"""
+        """Collect historical open interest data with proper API rate limiting"""
         logger.info(f"Collecting historical open interest for {len(symbols)} symbols...")
         
         for symbol in symbols:
@@ -171,33 +170,100 @@ class HistoricalDataCollector:
                 
                 logger.info(f"Collecting open interest for {symbol}...")
                 
-                # Calculate time range - use shorter period for open interest
+                # Calculate time range - use shorter period to respect API limits
                 end_time = datetime.now()
-                start_time = end_time - timedelta(days=30)  # Limit to 30 days for open interest
+                start_time = end_time - timedelta(days=self.years * 365)
                 
-                # Try to fetch open interest history
-                try:
-                    open_interest = self.exchange.fetch_open_interest_history(
-                        ccxt_symbol,
-                        since=int(start_time.timestamp() * 1000),
-                        limit=1000
-                    )
-                except Exception as api_error:
-                    logger.warning(f"  Open interest API failed for {symbol}: {api_error}")
-                    # Try alternative approach - get current open interest
+                all_open_interest = []
+                current_start_time = start_time
+                batch_count = 0
+                consecutive_errors = 0
+                max_consecutive_errors = 3
+                
+                # Collect open interest in batches until we reach the end
+                while current_start_time < end_time: # Reduced safety limit
                     try:
-                        current_oi = self.exchange.fetch_open_interest(ccxt_symbol)
-                        if current_oi:
-                            open_interest = [current_oi]
+                        logger.info(f"  Fetching batch {batch_count + 1} from {current_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        
+                        # Add exponential backoff for rate limiting
+                        if batch_count > 0:
+                            sleep_time = min(1.0 + (batch_count * 0.1), 5.0)  # Max 5 seconds
+                            logger.info(f"  Rate limiting: sleeping {sleep_time:.1f}s")
+                            time.sleep(sleep_time)
+                        
+                        open_interest = self.exchange.fetch_open_interest_history(
+                            ccxt_symbol,
+                            since=int(current_start_time.timestamp() * 1000),
+                            limit=1000  # Reduced limit to avoid API errors
+                        )
+                        
+                        if not open_interest:
+                            logger.info(f"  No more data available")
+                            break
+                        
+                        all_open_interest.extend(open_interest)
+                        logger.info(f"  Fetched {len(open_interest)} records (total: {len(all_open_interest)})")
+                        
+                        # Reset error counter on successful fetch
+                        consecutive_errors = 0
+                        
+                        # Update start time to the last record's timestamp + 1 minute
+                        last_timestamp = open_interest[-1].get('timestamp', 0)
+                        if last_timestamp:
+                            current_start_time = datetime.fromtimestamp(last_timestamp / 1000) + timedelta(minutes=1)
                         else:
-                            open_interest = None
-                    except:
-                        open_interest = None
+                            break
+                        
+                        batch_count += 1
+                        
+                    except Exception as api_error:
+                        consecutive_errors += 1
+                        error_msg = str(api_error)
+                        
+                        logger.warning(f"  API error for batch {batch_count + 1} (attempt {consecutive_errors}): {error_msg}")
+                        
+                        # Handle specific API errors
+                        if "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
+                            logger.warning(f"  Rate limit hit, sleeping 10 seconds...")
+                            time.sleep(10)
+                        elif "invalid" in error_msg.lower() and "startTime" in error_msg:
+                            logger.warning(f"  Invalid startTime, trying without since parameter...")
+                            try:
+                                open_interest = self.exchange.fetch_open_interest_history(
+                                    ccxt_symbol,
+                                    limit=1000
+                                )
+                                if open_interest:
+                                    all_open_interest.extend(open_interest)
+                                    logger.info(f"  Fetched {len(open_interest)} records without since parameter")
+                                    
+                                    # Update start time to the last record's timestamp + 1 minute
+                                    last_timestamp = open_interest[-1].get('timestamp', 0)
+                                    if last_timestamp:
+                                        current_start_time = datetime.fromtimestamp(last_timestamp / 1000) + timedelta(minutes=1)
+                                    
+                                    batch_count += 1
+                                    consecutive_errors = 0
+                            except Exception as e2:
+                                logger.error(f"  Failed without since parameter: {e2}")
+                                break
+                        elif consecutive_errors >= max_consecutive_errors:
+                            logger.error(f"  Too many consecutive errors ({consecutive_errors}), stopping")
+                            break
+                        else:
+                            # Exponential backoff for other errors
+                            backoff_time = min(2 ** consecutive_errors, 30)
+                            logger.warning(f"  Backing off for {backoff_time} seconds...")
+                            time.sleep(backoff_time)
+                        
+                        # If we've had too many errors, break
+                        if consecutive_errors >= max_consecutive_errors:
+                            break
                 
-                if open_interest:
+                if all_open_interest:
                     # Process open interest data properly
                     processed_data = []
-                    for oi in open_interest:
+                    for oi in all_open_interest:
                         processed_data.append({
                             'timestamp': oi.get('timestamp'),
                             'open_interest': oi.get('openInterestAmount'),
@@ -217,14 +283,15 @@ class HistoricalDataCollector:
                 else:
                     logger.warning(f"  No open interest data for {symbol}")
                 
-                time.sleep(0.5)  # Rate limiting
+                # Longer delay between symbols
+                time.sleep(2)
                 
             except Exception as e:
                 logger.error(f"Failed to collect open interest for {symbol}: {e}")
-    
-    def collect_historical_trades(self, symbols, days_back=30):
+
+    def collect_historical_trades(self, symbols):
         """Collect historical trades data (limited to recent period due to API limits)"""
-        logger.info(f"Collecting historical trades for {len(symbols)} symbols (last {days_back} days)...")
+        logger.info(f"Collecting historical trades for {len(symbols)} symbols (last {self.years} years)...")
         
         for symbol in symbols:
             try:
@@ -235,13 +302,13 @@ class HistoricalDataCollector:
                 
                 # Calculate time range (limited to recent period)
                 end_time = datetime.now()
-                start_time = end_time - timedelta(days=days_back)
+                start_time = end_time - timedelta(days=self.years * 365)
                 
                 all_trades = []
                 current_end_time = end_time
                 
                 # Collect trades in batches
-                for batch in range(10):  # Limit to 10 batches
+                for batch in range(1000):  # Limit to 10 batches
                     try:
                         since = int(start_time.timestamp() * 1000)
                         trades = self.exchange.fetch_trades(ccxt_symbol, since=since, limit=1000)
@@ -278,7 +345,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save trades
-                    filename = f"{symbol}_trades_{days_back}d.csv"
+                    filename = f"{symbol}_trades_{self.years}y.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} trade records to {filename}")
                 else:
@@ -286,7 +353,7 @@ class HistoricalDataCollector:
                 
             except Exception as e:
                 logger.error(f"Failed to collect trades for {symbol}: {e}")
-    
+
     def collect_all_historical_data(self, symbols, timeframes=['15m'], include_trades=True):
         """Collect all types of historical data"""
         logger.info("Starting comprehensive historical data collection...")
