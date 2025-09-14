@@ -19,17 +19,19 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class HistoricalDataCollector:
-    def __init__(self, data_dir="historical_data", days=None):
+    def __init__(self, data_dir="historical_data", days=None, type = None):
         """Initialize historical data collector"""
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.days = days
-        
+        self.type = type
+        if self.type is None:
+            raise ValueError("type is required future or spot")
         # Initialize Binance exchange
         self.exchange = binance_sync({
             'sandbox': False,
             'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
+            'options': {'defaultType': self.type}
         })
         
         logger.info(f"Historical Data Collector initialized for {days} days")
@@ -100,7 +102,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save individual symbol data
-                    filename = f"{symbol}_{timeframe}_{self.days}d.csv"
+                    filename = f"{self.type}_{symbol}_{timeframe}_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} records to {filename}")
                 else:
@@ -110,6 +112,8 @@ class HistoricalDataCollector:
                 logger.error(f"Failed to collect {symbol}: {e}")
     
     def collect_historical_funding_rates(self, symbols):
+        if self.type == "spot":
+            raise ValueError("spot does not have funding rates dumbass")
         """Collect historical funding rates for multiple days"""
         logger.info(f"Collecting historical funding rates for {len(symbols)} symbols...")
         
@@ -149,7 +153,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save funding rates
-                    filename = f"{symbol}_funding_rates_{self.days}d.csv"
+                    filename = f"{self.type}_{symbol}_funding_rates_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} funding rate records to {filename}")
                 else:
@@ -161,6 +165,8 @@ class HistoricalDataCollector:
                 logger.error(f"Failed to collect funding rates for {symbol}: {e}")
 
     def collect_historical_open_interest(self, symbols, timeframe='5m'):
+        if self.type == "spot":
+            raise ValueError("spot does not have open interest dumbass")
         """Collect historical open interest data with proper API rate limiting"""
         logger.info(f"Collecting historical open interest for {len(symbols)} symbols...")
         
@@ -217,7 +223,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save open interest
-                    filename = f"{symbol}_open_interest_{self.days}d_{timeframe}.csv"
+                    filename = f"{self.type}_{symbol}_open_interest_{self.days}d_{timeframe}.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} open interest records to {filename}")
                 else:
@@ -287,7 +293,7 @@ class HistoricalDataCollector:
                     df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                     
                     # Save trades
-                    filename = f"{symbol}_trades_{self.days}d.csv"
+                    filename = f"{self.type}_{symbol}_trades_{self.days}d.csv"
                     df.to_csv(self.data_dir / filename, index=False)
                     logger.info(f"  Saved {symbol}: {len(df):,} trade records to {filename}")
                 else:
@@ -295,53 +301,3 @@ class HistoricalDataCollector:
                 
             except Exception as e:
                 logger.error(f"Failed to collect trades for {symbol}: {e}")
-
-    def collect_all_historical_data(self, symbols, timeframes=['15m'], include_trades=True):
-        """Collect all types of historical data"""
-        logger.info("Starting comprehensive historical data collection...")
-        
-        start_time = datetime.now()
-        
-        # Collect OHLCV data for different timeframes
-        for timeframe in timeframes:
-            logger.info(f"\n=== Collecting OHLCV data ({timeframe}) ===")
-            self.collect_historical_ohlcv(symbols, timeframe)
-        
-        # Collect funding rates
-        logger.info(f"\n=== Collecting Funding Rates ===")
-        self.collect_historical_funding_rates(symbols)
-        
-        # Collect open interest
-        logger.info(f"\n=== Collecting Open Interest ===")
-        self.collect_historical_open_interest(symbols, timeframe)
-        
-        # Collect trades (limited period)
-        if include_trades:
-            logger.info(f"\n=== Collecting Trades Data ===")
-            self.collect_historical_trades(symbols)
-        
-        # Create summary
-        end_time = datetime.now()
-        duration = end_time - start_time
-        
-        summary = {
-            'collection_start': start_time.isoformat(),
-            'collection_end': end_time.isoformat(),
-            'duration_minutes': duration.total_seconds() / 60,
-            'symbols_processed': len(symbols),
-            'timeframes_collected': timeframes,
-            'days_covered': self.days,
-            'files_created': len(list(self.data_dir.glob('*.csv'))),
-            'data_directory': str(self.data_dir)
-        }
-        
-        # Save summary
-        with open(self.data_dir / f"historical_collection_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", 'w') as f:
-            json.dump(summary, f, indent=2, default=str)
-        
-        logger.info(f"\n=== Collection Complete ===")
-        logger.info(f"Duration: {duration}")
-        logger.info(f"Files created: {summary['files_created']}")
-        logger.info(f"Data directory: {self.data_dir}")
-        
-        return summary
