@@ -131,58 +131,104 @@ def adapt_demo_strategy(backtester):
         logger.error(f"Could not import demo strategy: {e}")
         return None
 
-def adapt_funding_rate_strategy(backtester):
-    """
-    Adapt the funding rate strategy from fundingrate2.py for backtesting
+# def adapt_funding_rate_strategy(backtester):
+#     """
+#     Adapt the funding rate strategy from fundingrate2.py for backtesting
     
-    Args:
-        backtester: Backtester instance
+#     Args:
+#         backtester: Backtester instance
         
-    Returns:
-        Adapted strategy instance
-    """
-    try:
-        from fundingrate2 import CryptoQuantDemo
+#     Returns:
+#         Adapted strategy instance
+#     """
+#     try:
+#         from fundingrate2 import CryptoQuantDemo
         
-        # Create adapter
-        adapter = StrategyAdapter(CryptoQuantDemo, backtester)
-        strategy = adapter.create_adapted_strategy()
+#         # Create adapter
+#         adapter = StrategyAdapter(CryptoQuantDemo, backtester)
+#         strategy = adapter.create_adapted_strategy()
         
-        # Override the run_strategy method to work with backtester
-        def adapted_run_strategy():
-            """Adapted run_strategy that works with backtester"""
-            print(f"\n===== Running Funding Rate Strategy at {strategy.current_time} =====")
+#         # Override the run_strategy method to work with backtester
+#         def adapted_run_strategy():
+#             """Adapted run_strategy that works with backtester"""
+#             print(f"\n===== Running Funding Rate Strategy at {strategy.current_time} =====")
             
-            # Get funding rate data
-            funding_rate_data = strategy.get_funding_rate_data(periods=10)
-            funding_rate_ma = strategy.calculate_funding_rate_MA(periods=10)
-            funding_rate_signal = strategy.calculate_funding_rate_signal(periods=10)
+#             # Get funding rate data
+#             funding_rate_data = strategy.get_funding_rate_data(periods=10)
+#             funding_rate_ma = strategy.calculate_funding_rate_MA(periods=10)
+#             funding_rate_signal = strategy.calculate_funding_rate_signal(periods=10)
             
-            # Calculate target positions
-            target_futures_positions = {}
-            target_spot_positions = {}
+#             # Calculate target positions
+#             target_futures_positions = {}
+#             target_spot_positions = {}
             
-            total_usdt = strategy.get_account_balance()['USDT'] * 0.3
-            position_value = total_usdt / len(strategy.symbols)
+#             total_usdt = strategy.get_account_balance()['USDT'] * 0.3
+#             position_value = total_usdt / len(strategy.symbols)
             
-            for symbol, signal_data in funding_rate_signal.items():
-                if signal_data['signal']:
-                    target_futures_positions[symbol] = signal_data['direction'] * position_value
-                    # Hedging
-                    target_spot_positions[symbol] = -signal_data['direction'] * position_value
+#             for symbol, signal_data in funding_rate_signal.items():
+#                 if signal_data['signal']:
+#                     target_futures_positions[symbol] = signal_data['direction'] * position_value
+#                     # Hedging
+#                     target_spot_positions[symbol] = -signal_data['direction'] * position_value
             
-            # Push positions
-            strategy.push_target_positions(target_futures_positions, type="future")
-            strategy.push_target_positions(target_spot_positions, type="spot")
+#             # Push positions
+#             strategy.push_target_positions(target_futures_positions, type="future")
+#             strategy.push_target_positions(target_spot_positions, type="spot")
         
-        # Replace the run_strategy method
-        strategy.run_strategy = adapted_run_strategy
+#         # Replace the run_strategy method
+#         strategy.run_strategy = adapted_run_strategy
+        
+#         return strategy
+        
+#     except ImportError as e:
+#         logger.error(f"Could not import funding rate strategy: {e}")
+#         return None
+
+def HODL_strategy(backtester):
+        # Simple HODL (buy and hold) strategy for backtester
+        class HODLStrategy:
+            def __init__(self):
+                self.oms_client = None
+                self.current_time = None
+                self.has_bought = False
+
+            def run_strategy(self):
+                # Only buy once at the beginning, then hold
+                if not self.has_bought:
+                    # Allocate all USDT equally to all symbols (assume all are spot or perpetual)
+                    balance = self.oms_client.get_account_balance()
+                    usdt = balance.get("USDT", 0)
+                    if usdt > 0:
+                        num_symbols = len(self.symbols)
+                        if num_symbols == 0:
+                            return
+                        allocation = (usdt - 1000) / num_symbols
+                        for symbol in self.symbols:
+                            # Determine instrument type
+                            self.oms_client.set_target_position(
+                                instrument_name=symbol,
+                                instrument_type="spot",
+                                target_value=allocation,
+                                position_side="LONG"
+                            )
+                            self.oms_client.set_target_position(
+                                instrument_name=symbol,
+                                instrument_type="future",
+                                target_value=10,
+                                position_side="LONG"
+                            )
+                        self.has_bought = True
+
+        # Attach symbols from backtester if available
+        strategy = HODLStrategy()
+        if hasattr(backtester, "symbols"):
+            strategy.symbols = backtester.symbols
+        strategy.oms_client = backtester.oms_client
+        strategy.current_time = getattr(backtester, "current_time", None)
         
         return strategy
         
-    except ImportError as e:
-        logger.error(f"Could not import funding rate strategy: {e}")
-        return None
+
 
 def run_backtest_with_strategy(backtester, strategy_name="demo", **kwargs):
     """
@@ -199,8 +245,10 @@ def run_backtest_with_strategy(backtester, strategy_name="demo", **kwargs):
     
     if strategy_name == "demo":
         strategy = adapt_demo_strategy(backtester)
-    elif strategy_name == "funding_rate":
-        strategy = adapt_funding_rate_strategy(backtester)
+    # elif strategy_name == "funding_rate":
+    #     strategy = adapt_funding_rate_strategy(backtester)
+    elif strategy_name == "HODL":
+        strategy = HODL_strategy(backtester)
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
     
@@ -239,47 +287,47 @@ if __name__ == "__main__":
     
     # Print results
     backtester.print_results(results)
-
-def adapt_funding_rate_strategy2(backtester):
-   try:
-        from fundingrate2 import CryptoQuantDemo
+    
+# def adapt_funding_rate_strategy2(backtester):
+#     try:
+#         from fundingrate2 import CryptoQuantDemo
         
-        # Create adapter
-        adapter = StrategyAdapter(CryptoQuantDemo, backtester)
-        strategy = adapter.create_adapted_strategy()
+#         # Create adapter
+#         adapter = StrategyAdapter(CryptoQuantDemo, backtester)
+#         strategy = adapter.create_adapted_strategy()
         
-        # Override the run_strategy method to work with backtester
-        def adapted_run_strategy():
-            """Adapted run_strategy that works with backtester"""
-            print(f"\n===== Running Funding Rate Strategy at {strategy.current_time} =====")
+#         # Override the run_strategy method to work with backtester
+#         def adapted_run_strategy():
+#             """Adapted run_strategy that works with backtester"""
+#             print(f"\n===== Running Funding Rate Strategy at {strategy.current_time} =====")
             
-            # Get funding rate data
-            funding_rate_data = strategy.get_funding_rate_data(periods=10)
-            funding_rate_ma = strategy.calculate_funding_rate_MA(periods=10)
-            funding_rate_signal = strategy.calculate_funding_rate_signal(periods=10)
+#             # Get funding rate data
+#             funding_rate_data = strategy.get_funding_rate_data(periods=10)
+#             funding_rate_ma = strategy.calculate_funding_rate_MA(periods=10)
+#             funding_rate_signal = strategy.calculate_funding_rate_signal(periods=10)
             
-            # Calculate target positions
-            target_futures_positions = {}
-            target_spot_positions = {}
+#             # Calculate target positions
+#             target_futures_positions = {}
+#             target_spot_positions = {}
             
-            total_usdt = strategy.get_account_balance()['USDT'] * 0.3
-            position_value = total_usdt / len(strategy.symbols)
+#             total_usdt = strategy.get_account_balance()['USDT'] * 0.3
+#             position_value = total_usdt / len(strategy.symbols)
             
-            for symbol, signal_data in funding_rate_signal.items():
-                if signal_data['signal']:
-                    target_futures_positions[symbol] = signal_data['direction'] * position_value
-                    # Hedging
-                    target_spot_positions[symbol] = -signal_data['direction'] * position_value
+#             for symbol, signal_data in funding_rate_signal.items():
+#                 if signal_data['signal']:
+#                     target_futures_positions[symbol] = signal_data['direction'] * position_value
+#                     # Hedging
+#                     target_spot_positions[symbol] = -signal_data['direction'] * position_value
             
-            # Push positions
-            strategy.push_target_positions(target_futures_positions, type="future")
-            strategy.push_target_positions(target_spot_positions, type="spot")
+#             # Push positions
+#             strategy.push_target_positions(target_futures_positions, type="future")
+#             strategy.push_target_positions(target_spot_positions, type="spot")
         
-        # Replace the run_strategy method
-        strategy.run_strategy = adapted_run_strategy
+#         # Replace the run_strategy method
+#         strategy.run_strategy = adapted_run_strategy
         
-        return strategy
+#         return strategy
         
-    except ImportError as e:
-        logger.error(f"Could not import funding rate strategy: {e}")
-        return None
+#     except ImportError as e:
+#         logger.error(f"Could not import funding rate strategy: {e}")
+#         return None

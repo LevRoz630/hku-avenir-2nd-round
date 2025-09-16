@@ -1,1 +1,0 @@
-Adapt with strategy_adapter.py write a new function there, then in create new file like backtest_example.py
