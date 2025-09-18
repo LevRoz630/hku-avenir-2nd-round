@@ -23,12 +23,12 @@ class HoldStrategy:
                     print(f"debug allocation:{allocation}")
                     # Determine instrument type
                     print(f"debug symbol:{symbol}")
-                    # self.oms_client.set_target_position(
-                    #     symbol=symbol,
-                    #     instrument_type="spot",
-                    #     target_value=allocation,
-                    #     position_side="LONG"
-                    # )
+                    self.oms_client.set_target_position(
+                        symbol=symbol,
+                        instrument_type="spot",
+                        target_value=allocation,
+                        position_side="LONG"
+                    )
                     self.oms_client.set_target_position(
                         symbol=symbol,
                         instrument_type="future",

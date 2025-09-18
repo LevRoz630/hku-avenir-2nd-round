@@ -925,7 +925,7 @@ class HistoricalDataCollector:
                 start_time = end_time - timedelta(days=self.days)
                 while start_time < end_time:
 
-                    print(start_time)
+
                     open_interest = self.exchange.fetch_open_interest_history(
                         ccxt_symbol,
                         since=int(start_time.timestamp() * 1000),
