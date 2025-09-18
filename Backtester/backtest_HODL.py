@@ -23,6 +23,8 @@ from backtester import Backtester
 from strategy_adapter import run_backtest_with_strategy
 from hist_data import HistoricalDataCollector
 
+sys.path.append(str(Path(__file__).parent.parent))
+from strategies.v1_hold import HoldStrategy
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -48,33 +50,6 @@ def collect_historical_data():
 
     collector.collect_comprehensive_data(timeframe='1h')
     print("Historical data collection completed!")
-
-
-def run_demo_strategy_backtest():
-    """Run backtest with the demo strategy"""
-    print("\n" + "="*60)
-    print("RUNNING DEMO STRATEGY BACKTEST")
-    print("="*60)
-    
-    # 3. Initialize backtester and change balance and symbols
-    backtester = Backtester(
-        historical_data_dir="historical_data",
-        initial_balance=10000.0,
-        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"]
-    )
-    
-    # 4. Run backtest and change strategies and start date/end date and timestep
-    results = run_backtest_with_strategy(
-        backtester,
-        strategy_name="HODL",
-        start_date=datetime.now() - timedelta(days=1),
-        end_date=datetime.now(),
-        time_step=timedelta(hours=1)
-    )
-    
-    backtester.print_results(results)
-    
-    return results
 
 def plot_performance(demo_results):
     """Plot performance comparison"""
@@ -177,6 +152,32 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
+    backtester = Backtester(
+        historical_data_dir="historical_data",
+        initial_balance=10000.0,
+        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+    )
+    
+    # 4. Run backtest and change strategies and start date/end date and timestep
+
+    results = backtester.run_backtest(
+        strategy_class=HoldStrategy,
+        start_date=datetime.now() - timedelta(days=7),
+        end_date=datetime.now(),
+        time_step=timedelta(hours=1)
+    )
+    
+    backtester.print_results(results)
+
+    # Analyze trades
+    analyze_trades(results, "Demo Strategy")
+    
+    # Plot results
+    plot_performance(results)
+    
+    # Save results
+    results_summary = {
+        'demo_strategy': results}
 
     data_dir = Path("historical_data")
     if not data_dir.exists() or not any(data_dir.iterdir()):
@@ -185,21 +186,6 @@ def main():
     else:
         print("Historical data found. Skipping data collection.")
     
-    # Run backtests
-    demo_results = run_demo_strategy_backtest()
-
-    # Analyze trades
-    analyze_trades(demo_results, "Demo Strategy")
-    
-    # Plot results
-    plot_performance(demo_results)
-    
-    # Save results
-    results_summary = {
-        'demo_strategy': demo_results}
-        
-    import json
-    from datetime import datetime
     
     with open('backtest_results.json', 'w') as f:
         # Convert various types for JSON serialization
