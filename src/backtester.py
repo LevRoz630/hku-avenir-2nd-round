@@ -14,7 +14,6 @@ class Backtester:
         self.start_time = None
         self.end_time = None
         self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
-        self.data_manager = HistoricalDataManager(data_dir=historical_data_dir)
         self.portfolio_values = []
         self.daily_returns = []
         self.max_drawdown = 0
@@ -41,8 +40,10 @@ class Backtester:
         Returns:
             Dictionary with backtest results and performance metrics
         """
-        self.oms_client.set_data_manager(self.data_manager)
-                # Pass on all the attributes of the class to the trategy for execution
+        self.oms_client.set_data_manager(HistoricalDataManager(data_dir=self.historical_data_dir))
+        # Normalize symbols for data loading (historical files are keyed by base symbols)
+        base_symbols = [s.replace('-PERP', '') for s in symbols]
+        self.oms_client.data_manager.load_historical_data(base_symbols)
         strategy = strategy_class(symbols=symbols, oms_client=self.oms_client)
         self.start_time = start_date
         self.end_time = end_date
@@ -61,7 +62,6 @@ class Backtester:
                 self.current_time = self.current_time
                 
                 total_value = self.oms_client.get_total_portfolio_value()
-                print(f"debug total value:{total_value}")
                 self.portfolio_values.append(total_value)
                 summary = self.oms_client.get_position_summary()
                 logger.info(f"Total Portfolio Value: {total_value}")
@@ -73,6 +73,7 @@ class Backtester:
                 # Move to next time step
                 self.current_time += time_step
                 iteration += 1
+                self.oms_client.get_position_summary()
                 
                 # Log progress every 24 iterations (daily if hourly steps)
                 if iteration % 24 == 0:
@@ -84,6 +85,7 @@ class Backtester:
                 continue
         
         # Calculate final performance metrics
+        
         self.calculate_performance_metrics()
         
         # Return results
@@ -93,7 +95,7 @@ class Backtester:
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
             'max_drawdown': self.max_drawdown,
             'sharpe_ratio': self.sharpe_ratio,
-            'trade_history': self.trade_history,
+            'trade_history': self.oms_client.trade_history,
             'final_balance': self.oms_client.get_account_balance(),
             'final_positions': self.oms_client.get_position()
         }

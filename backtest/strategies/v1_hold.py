@@ -15,23 +15,24 @@ class HoldStrategy:
             usdt = balance.get("USDT", 0)
             print(f"debug usdt:{usdt}")
             if usdt > 0:
-                num_symbols = len(self.symbols)
-                if num_symbols == 0:
-                    return
-                allocation = (usdt - 1000) / num_symbols
-                print(f"debug allocation:{allocation}")
+
                 for symbol in self.symbols:
+                    num_symbols = len(self.symbols)
+
+                    allocation = (usdt - 1000) / num_symbols 
+                    print(f"debug allocation:{allocation}")
                     # Determine instrument type
                     print(f"debug symbol:{symbol}")
-                    self.oms_client.set_target_position(
-                        symbol=symbol,
-                        instrument_type="spot",
-                        target_value=allocation,
-                        position_side="LONG"
-                    )
+                    # self.oms_client.set_target_position(
+                    #     symbol=symbol,
+                    #     instrument_type="spot",
+                    #     target_value=allocation,
+                    #     position_side="LONG"
+                    # )
                     self.oms_client.set_target_position(
                         symbol=symbol,
                         instrument_type="future",
-                        target_value=10,
+                        target_value=allocation,
                         position_side="LONG"
                     )
+            self.has_bought = True

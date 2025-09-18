@@ -42,6 +42,9 @@ class BacktesterOMS:
         self.performance_metrics = {}
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
+        # Simple per-timestamp price cache: { (symbol, instrument_type): price }
+        self._price_cache_time: Optional[datetime] = None
+        self._price_cache: Dict[Tuple[str, str], float] = {}
 
     def set_data_manager(self, data_manager):
         """Set the data manager for price fetching"""
@@ -50,6 +53,15 @@ class BacktesterOMS:
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
+        # Invalidate price cache when time changes
+        self._price_cache_time = current_time
+        self._price_cache.clear()
+
+    def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
+        """Map trading symbol to data key used by HistoricalDataManager."""
+        if instrument_type in ("future", "mark", "index"):
+            return symbol.replace('-PERP', '')
+        return symbol
         
     def get_balance(self) -> List[Dict[str, Any]]:
         """Get account balance - compatible with OMS interface"""
@@ -67,7 +79,7 @@ class BacktesterOMS:
 
             if abs(pos['quantity']) > 0:
                 # Calculate current value and PnL
-                current_price = self._get_current_price(symbol, instrument_type)
+                current_price = self.get_current_price(symbol, instrument_type)
                 if current_price:
                     current_value = abs(pos['quantity']) * current_price
                     pnl = pos['quantity'] * (current_price - pos['entry_price'])
@@ -88,15 +100,8 @@ class BacktesterOMS:
                           target_value: float, position_side: str) -> Dict[str, Any]:
         """Set target position - compatible with OMS interface"""
         try:
-            if symbol.endswith("-PERP"):
-                instrument_type = "future"
-            elif symbol.endswith("-USDT"):
-                instrument_type = "spot"
-            else:
-                raise ValueError(f"Invalid symbol: {symbol}")
 
             if instrument_type == "future":
-                print(f"debug setting target position for future:{symbol}")
                 return self._set_position(symbol, target_value, position_side, instrument_type)
             elif instrument_type == "spot":
                 return self._set_position(symbol, target_value, position_side, instrument_type)
@@ -107,58 +112,76 @@ class BacktesterOMS:
             logger.error(f"Error setting target position: {e}")
             return {"id": f"error_{len(self.trade_history)}", "status": "error", "message": str(e)}
  
-    def _set_position(self, symbol: str, trade_quantity: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
-        """Set perpetual position"""
-        current_price = self._get_current_price(symbol, instrument_type)
-        print(f"debug current price:{current_price}")
+    def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
+        """Set position using USDT amount; converts to quantity at current price"""
+        current_price = self.get_current_price(symbol, instrument_type)
         if not current_price:
             raise ValueError(f"Unable to get current price for {symbol}")
-            
-        # Calculate target quantity
-        trade_value = trade_quantity * current_price
-        print(f"debug trade value:{trade_value}")
+
+        # Treat incoming value as USDT to spend, convert to quantity
+        trade_value = float(trade_amount_usdt)
         if trade_value > self.balance['USDT']:
             raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
 
-        # Get current position
-        current_pos = self.positions.get(symbol, {'quantity': 0, 'value': 0, 'side': 'LONG', 'entry_price': 0, 'pnl': 0})
-        current_quantity = current_pos['quantity']
-        current_side = current_pos['side']
-        current_entry_price = current_pos['entry_price']
+        trade_qty = trade_value / current_price
+
+        # Ensure a position object exists for this symbol
+        pos = self.positions.setdefault(symbol, {
+            'quantity': 0.0,
+            'value': 0.0,
+            'side': 'LONG',
+            'entry_price': 0.0,
+            'pnl': 0.0,
+            'instrument_type': instrument_type,
+        })
+
+        current_quantity = float(pos.get('quantity', 0.0))
+        current_side = pos.get('side', 'LONG')
+        current_entry_price = float(pos.get('entry_price', 0.0))
 
         if position_side == current_side:
+            # Increase position on same side
             self.balance['USDT'] -= trade_value
-            
-
-            self.positions[symbol]['quantity'] = current_quantity + trade_quantity
-            self.positions[symbol]['value'] = (current_quantity + trade_quantity) * current_price
-            self.positions[symbol]['entry_price'] = ((current_entry_price * current_quantity +  current_price * trade_quantity )/ (current_quantity + trade_quantity))
-            
+            new_qty = current_quantity + trade_qty
+            pos['quantity'] = new_qty
+            pos['value'] = abs(new_qty) * current_price
+            pos['entry_price'] = (
+                (current_entry_price * current_quantity + current_price * trade_qty) / new_qty
+            ) if new_qty else current_price
+            pos['side'] = position_side
 
         elif position_side != current_side:
-            # calculates the profit from closing the position and reduce balance by the new position
-            self.positions[symbol]['pnl'] += self.calculate_positions_pnl(symbol)
-            self.balance['USDT'] += self.calculate_positions_pnl(symbol)
+            # Close opposite side, realize PnL, then open new side
+            pnl = self.calculate_positions_pnl(symbol, instrument_type)
+            pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
+            self.balance['USDT'] += (pnl or 0.0)
             self.balance['USDT'] -= trade_value
-            # update the position itself
-            self.positions[symbol]['quantity'] =  trade_quantity
-            self.positions[symbol]['value'] = self.positions[symbol]['quantity'] * current_price
-            self.positions[symbol]['side'] = position_side
-            self.positions[symbol]['entry_price'] = current_price
+            pos['quantity'] = trade_qty
+            pos['value'] = abs(trade_qty) * current_price
+            pos['side'] = position_side
+            pos['entry_price'] = current_price
+            pos['instrument_type'] = instrument_type
 
         elif position_side == 'CLOSE':
-                # returns the cash to our balance as we are closing the position
-                self.balance['USDT'] += self.calculate_positions_pnl(symbol)
-                self.positions[symbol]['pnl'] += self.calculate_positions_pnl(symbol)
-
-                self.positions[symbol] = {'quantity': 0, 'value': 0, 'side': 'CLOSE', 'entry_price': 0}
+            # Close the position and realize PnL
+            pnl = self.calculate_positions_pnl(symbol, instrument_type)
+            self.balance['USDT'] += (pnl or 0.0)
+            pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
+            self.positions[symbol] = {
+                'quantity': 0.0,
+                'value': 0.0,
+                'side': 'CLOSE',
+                'entry_price': 0.0,
+                'pnl': pos.get('pnl', 0.0),
+                'instrument_type': instrument_type,
+            }
         else:
             raise ValueError(f"Invalid position side: {position_side}")
        
         self.trade_history.append({
             'timestamp': self.current_time or datetime.now(),
             'symbol': symbol,
-            'type': 'future',
+            'type': instrument_type,
             'side': self.positions[symbol]['side'],
             'quantity': self.positions[symbol]['quantity'] ,
             'value': self.positions[symbol]['value'] ,
@@ -168,7 +191,7 @@ class BacktesterOMS:
         
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
-    def _get_current_price(self, symbol: str, instrument_type: str = 'mark') -> Optional[float]:
+    def get_current_price(self, symbol: str, instrument_type: str = 'mark') -> Optional[float]:
         """Get current price for a symbol
         
         Args:
@@ -177,10 +200,15 @@ class BacktesterOMS:
         """
         if not self.data_manager or not self.current_time:
             return None
-        print(f"debug getting current price for {symbol} with instrument type:{instrument_type}")
-        base_symbol = symbol.replace('-PERP', '') if instrument_type in ('future', 'mark') else symbol
+
+        # Serve from cache if available for this timestamp
+        cache_key = (symbol, instrument_type)
+        if self._price_cache_time == self.current_time and cache_key in self._price_cache:
+            return self._price_cache[cache_key]
 
         try:
+            # Normalize to data keys (base symbols like BTC-USDT)
+            base_symbol = self._normalize_symbol(symbol, instrument_type)
             if instrument_type == 'mark':
                 ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'perpetual_mark_ohlcv')
             elif instrument_type == 'index':
@@ -193,7 +221,9 @@ class BacktesterOMS:
                 raise ValueError(f"Invalid price type: {instrument_type}")
                 
             if not ohlcv_data.empty:
-                return float(ohlcv_data.iloc[-1]['close'])
+                price = float(ohlcv_data.iloc[-1]['close'])
+                self._price_cache[cache_key] = price
+                return price
         except Exception as e:
             logger.error(f"Error getting current {instrument_type} price for {symbol}: {e}")
         
@@ -201,27 +231,28 @@ class BacktesterOMS:
     
     def calculate_positions_pnl(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""
-        current_price = self._get_current_price(symbol, instrument_type)
+        current_price = self.get_current_price(symbol, instrument_type)
         pos = self.positions[symbol]
+        pnl = 0.0
         if current_price and pos['quantity'] != 0:
             if pos['side'] == 'LONG':
                 pnl = pos['quantity'] * (current_price - pos['entry_price'])
             elif pos['side'] == 'SHORT':
                 pnl = pos['quantity'] * (pos['entry_price'] - current_price)
-            pos['value'] = pos['quantity'] * current_price
+            pos['value'] = abs(pos['quantity']) * current_price
         return pnl
 
     def get_total_portfolio_value(self) -> float:
         """Get total portfolio value including positions and balances"""
         total_value = self.balance.get('USDT', 0)
-        print(f"debug total value get_total_portfolio_value:{total_value}")
 
-        print(f"debug positions:{self.positions}")
-        # Add value of perpetual positions
+        # Revalue positions at current price each call
         for symbol, pos in self.positions.items():
-            pos_value = pos['value']
-            print(f"debug pos_value:{pos_value}")
-            total_value += pos_value
+            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
+            current_price = self.get_current_price(symbol, instrument_type)
+            if current_price:
+                pos['value'] = abs(pos.get('quantity', 0.0)) * current_price
+                total_value += pos['value']
         return total_value  
 
     def get_position_summary(self) -> Dict[str, Any]:
@@ -235,7 +266,7 @@ class BacktesterOMS:
         
         for symbol, pos in self.positions.items():
             if abs(pos['quantity']) > 0:
-                current_price = self._get_current_price(symbol, pos['instrument_type'])
+                current_price = self.get_current_price(symbol, pos['instrument_type'])
                 if current_price:
                     summary['positions'][symbol] = {
                         'quantity': pos['quantity'],

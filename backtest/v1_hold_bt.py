@@ -16,39 +16,16 @@ from pathlib import Path
 import pandas as pd
 import logging
 
-# Add current directory to path
+# Add current directory to path (for local strategies package)
 sys.path.append(str(Path(__file__).parent))
+# Add src directory to path (for core engine modules)
+sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from backtester import Backtester
-from hist_data import HistoricalDataCollector
-
-sys.path.append(str(Path(__file__).parent.parent))
 from strategies.v1_hold import HoldStrategy
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-def collect_historical_data():
-    """Collect historical data for backtesting"""
-    print("Collecting historical data...")
-    
-    # 1. Define symbols to collect
-    symbols = [
-        "BTC-USDT",
-        "ETH-USDT", 
-        "SOL-USDT",
-    ]
-
-    # 2. Initialize data collector and change days of data to fetch
-    collector = HistoricalDataCollector(
-        data_dir="historical_data",
-        days=30,  
-        symbols=symbols
-    )
-
-
-    collector.collect_comprehensive_data(timeframe='1h')
-    print("Historical data collection completed!")
 
 def plot_performance(demo_results):
     """Plot performance comparison"""
@@ -158,8 +135,8 @@ def main():
     # 4. Run backtest and change strategies and start date/end date and timestep
 
     results = backtester.run_backtest(strategy_class=HoldStrategy, 
-    symbols=["BTC-USDT-PERP", "ETH-USDT-PERP", "SOL-USDT-PERP"],
-    start_date=datetime.now() - timedelta(hours=3), 
+    symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
+    start_date=datetime.now() - timedelta(days = 1), 
     end_date=datetime.now(), time_step=timedelta(hours=1))
 
     
@@ -176,12 +153,7 @@ def main():
         'hold_strategy': results}
 
     data_dir = Path("historical_data")
-    if not data_dir.exists() or not any(data_dir.iterdir()):
-        print("No historical data found. Collecting data...")
-        collect_historical_data()
-    else:
-        print("Historical data found. Skipping data collection.")
-    
+
     import json
     
     with open('backtest_results.json', 'w') as f:
