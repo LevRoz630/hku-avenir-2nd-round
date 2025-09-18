@@ -19,7 +19,7 @@ import logging
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
 
-from backtester import BacktesterOMS
+from backtester import Backtester
 from hist_data import HistoricalDataCollector
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -151,7 +151,7 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
-    backtester = BacktesterOMS(
+    backtester = Backtester(
         historical_data_dir="historical_data",
     )
     
@@ -159,7 +159,7 @@ def main():
 
     results = backtester.run_backtest(strategy_class=HoldStrategy, 
     symbols=["BTC-USDT-PERP", "ETH-USDT-PERP", "SOL-USDT-PERP"],
-    start_date=datetime.now() - timedelta(days=7), 
+    start_date=datetime.now() - timedelta(hours=3), 
     end_date=datetime.now(), time_step=timedelta(hours=1))
 
     
