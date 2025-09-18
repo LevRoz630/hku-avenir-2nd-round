@@ -31,23 +31,21 @@ def collect_historical_data():
     """Collect historical data for backtesting"""
     print("Collecting historical data...")
     
-    # Define symbols to collect
+    # 1. Define symbols to collect
     symbols = [
         "BTC-USDT",
         "ETH-USDT", 
         "SOL-USDT",
     ]
 
-    # Initialize data collector
+    # 2. Initialize data collector and change days of data to fetch
     collector = HistoricalDataCollector(
         data_dir="historical_data",
-        days=30,  # Collect 30 days of data
+        days=30,  
         symbols=symbols
     )
 
 
-    
-    # Collect different types of data
     collector.collect_comprehensive_data(timeframe='1h')
     print("Historical data collection completed!")
 
@@ -58,14 +56,14 @@ def run_demo_strategy_backtest():
     print("RUNNING DEMO STRATEGY BACKTEST")
     print("="*60)
     
-    # Initialize backtester
+    # 3. Initialize backtester and change balance and symbols
     backtester = Backtester(
         historical_data_dir="historical_data",
         initial_balance=10000.0,
         symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"]
     )
     
-    # Run backtest
+    # 4. Run backtest and change strategies and start date/end date and timestep
     results = run_backtest_with_strategy(
         backtester,
         strategy_name="HODL",
@@ -74,7 +72,6 @@ def run_demo_strategy_backtest():
         time_step=timedelta(hours=1)
     )
     
-    # Print results
     backtester.print_results(results)
     
     return results
@@ -87,7 +84,7 @@ def plot_performance(demo_results):
         
         plt.figure(figsize=(12, 8))
         
-        # Plot portfolio values
+
         plt.subplot(2, 2, 1)
         plt.plot(demo_results['portfolio_values'], label='Demo Strategy', alpha=0.8)
         plt.title('Portfolio Value Over Time')
@@ -96,13 +93,10 @@ def plot_performance(demo_results):
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-
-        # Plot drawdown
         plt.subplot(2, 2, 3)
         demo_drawdown = []
         funding_drawdown = []
         
-        # Calculate running drawdown
         demo_peak = demo_results['portfolio_values'][0]
 
         for value in demo_results['portfolio_values']:
@@ -118,12 +112,11 @@ def plot_performance(demo_results):
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        # Plot performance metrics
         plt.subplot(2, 2, 4)
         metrics = ['Total Return', 'Max Drawdown', 'Sharpe Ratio']
         demo_values = [
             demo_results['total_return'],
-            -demo_results['max_drawdown'],  # Negative for better visualization
+            -demo_results['max_drawdown'],  
             demo_results['sharpe_ratio']
         ]
 
@@ -161,20 +154,19 @@ def analyze_trades(results, strategy_name):
         print("No trades executed")
         return
     
-    # Convert to DataFrame for analysis
+    
     df = pd.DataFrame(trades)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
     print(f"Total trades: {len(trades)}")
     print(f"Trading frequency: {len(trades) / 7:.1f} trades per day")
     
-    # Analyze by symbol
+
     symbol_counts = df['symbol'].value_counts()
     print("\nTrades by symbol:")
     for symbol, count in symbol_counts.items():
         print(f"  {symbol}: {count} trades")
-    
-    # Analyze by side
+
     side_counts = df['side'].value_counts()
     print("\nTrades by side:")
     for side, count in side_counts.items():
@@ -185,7 +177,7 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
-    # Check if historical data exists
+
     data_dir = Path("historical_data")
     if not data_dir.exists() or not any(data_dir.iterdir()):
         print("No historical data found. Collecting data...")
@@ -200,7 +192,7 @@ def main():
     analyze_trades(demo_results, "Demo Strategy")
     
     # Plot results
-    # plot_performance(demo_results)
+    plot_performance(demo_results)
     
     # Save results
     results_summary = {
