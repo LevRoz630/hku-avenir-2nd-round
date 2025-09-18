@@ -13,12 +13,192 @@ from pathlib import Path
 import logging
 from ccxt import binance as binance_sync
 import os
+from typing import List, Dict
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+class HistoricalDataManager:
+    """Manages loading and accessing historical data for backtesting"""
+    
+    def __init__(self, data_dir: str = "historical_data"):
+        self.data_dir = Path(data_dir)
+        
+        # Separate data storage for different market types and data types
+        self.spot_ohlcv_data = {}
+        self.spot_trades_data = {}
+        self.perpetual_mark_ohlcv_data = {}
+        self.perpetual_index_ohlcv_data = {}
+        self.funding_data = {}
+        self.open_interest_data = {}
+        self.perpetual_trades_data = {}
+        
+    def load_historical_data(self, symbols: List[str], data_types: List[str] = None):
+        """Load all historical data for given symbols"""
+        if data_types is None:
+            data_types = ['spot_ohlcv', 'spot_trades', 'perpetual_mark_ohlcv', 'perpetual_index_ohlcv', 'funding_rates', 'open_interest', 'perpetual_trades']
+            
+        logger.info(f"Loading comprehensive historical data for {len(symbols)} symbols...")
+        
+        for symbol in symbols:
+            # Load spot data
+            if 'spot_ohlcv' in data_types:
+                self.spot_ohlcv_data[symbol] = self._load_spot_ohlcv_data(symbol)
+            # if 'spot_trades' in data_types:
+            #     self.spot_trades_data[symbol] = self._load_spot_trades_data(symbol)
+            
+            # Load perpetual data
+            if 'perpetual_mark_ohlcv' in data_types:
+                self.perpetual_mark_ohlcv_data[symbol] = self._load_perpetual_mark_ohlcv_data(symbol)
+            if 'perpetual_index_ohlcv' in data_types:
+                self.perpetual_index_ohlcv_data[symbol] = self._load_perpetual_index_ohlcv_data(symbol)
+            if 'funding_rates' in data_types:
+                self.funding_data[symbol] = self._load_funding_data(symbol)
+            if 'open_interest' in data_types:
+                self.open_interest_data[symbol] = self._load_open_interest_data(symbol)
+            # if 'perpetual_trades' in data_types:
+            #     self.perpetual_trades_data[symbol] = self._load_perpetual_trades_data(symbol)
+                
+        logger.info("Comprehensive historical data loading completed")
+    
+    def _load_spot_ohlcv_data(self, symbol: str) -> pd.DataFrame:
+        """Load spot OHLCV data for a symbol"""
+        for timeframe in ['1m', '5m', '15m', '1h', '1d']:
+            for days in [1, 7, 30, 90]:
+                filename = f"spot_{symbol}_{timeframe}_{days}d.csv"
+                filepath = self.data_dir / filename
+                if filepath.exists():
+                    df = pd.read_csv(filepath)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    return df
+        
+        logger.warning(f"No spot OHLCV data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_spot_trades_data(self, symbol: str) -> pd.DataFrame:
+        """Load spot trades data for a symbol"""
+        for days in [1, 7, 30, 90]:
+            filename = f"spot_{symbol}_trades_{days}d.csv"
+            filepath = self.data_dir / filename
+            if filepath.exists():
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
+        
+        logger.warning(f"No spot trades data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_perpetual_mark_ohlcv_data(self, symbol: str) -> pd.DataFrame:
+        """Load perpetual mark price OHLCV data for a symbol"""
+        for timeframe in ['1m', '5m', '15m', '1h', '1d']:
+            for days in [1, 7, 30, 90]:
+                filename = f"perpetual_{symbol}_mark_{timeframe}_{days}d.csv"
+                filepath = self.data_dir / filename
+                if filepath.exists():
+                    df = pd.read_csv(filepath)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    return df
+        
+        logger.warning(f"No perpetual mark OHLCV data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_perpetual_index_ohlcv_data(self, symbol: str) -> pd.DataFrame:
+        """Load perpetual index price OHLCV data for a symbol"""
+        for timeframe in ['1m', '5m', '15m', '1h', '1d']:
+            for days in [1, 7, 30, 90]:
+                filename = f"perpetual_{symbol}_index_{timeframe}_{days}d.csv"
+                filepath = self.data_dir / filename
+                if filepath.exists():
+                    df = pd.read_csv(filepath)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    return df
+        
+        logger.warning(f"No perpetual index OHLCV data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_funding_data(self, symbol: str) -> pd.DataFrame:
+        """Load funding rate data for a symbol"""
+        for days in [1, 7, 30, 90]:
+            filename = f"perpetual_{symbol}_funding_rates_{days}d.csv"
+            filepath = self.data_dir / filename
+            if filepath.exists():
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
+        
+        logger.warning(f"No funding rate data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_open_interest_data(self, symbol: str) -> pd.DataFrame:
+        """Load open interest data for a symbol"""
+        for timeframe in ['5m', '15m', '1h']:
+            for days in [1, 7, 30, 90]:
+                filename = f"perpetual_{symbol}_open_interest_{days}d_{timeframe}.csv"
+                filepath = self.data_dir / filename
+                if filepath.exists():
+                    df = pd.read_csv(filepath)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    return df
+        
+        logger.warning(f"No open interest data found for {symbol}")
+        return pd.DataFrame()
+    
+    def _load_perpetual_trades_data(self, symbol: str) -> pd.DataFrame:
+        """Load perpetual trades data for a symbol"""
+        for days in [1, 7, 30, 90]:
+            filename = f"perpetual_{symbol}_trades_{days}d.csv"
+            filepath = self.data_dir / filename
+            if filepath.exists():
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
+        
+        logger.warning(f"No perpetual trades data found for {symbol}")
+        return pd.DataFrame()
+    
+    def get_data_at_time(self, symbol: str, timestamp: datetime, data_type: str = 'spot_ohlcv') -> pd.DataFrame:
+        """Get data up to a specific timestamp"""
+        if data_type == 'spot_ohlcv':
+            data = self.spot_ohlcv_data.get(symbol, pd.DataFrame())
+        elif data_type == 'spot_trades':
+            data = self.spot_trades_data.get(symbol, pd.DataFrame())
+        elif data_type == 'perpetual_mark_ohlcv':
+            data = self.perpetual_mark_ohlcv_data.get(symbol, pd.DataFrame())
+        elif data_type == 'perpetual_index_ohlcv':
+            data = self.perpetual_index_ohlcv_data.get(symbol, pd.DataFrame())
+        elif data_type == 'funding_rates':
+            data = self.funding_data.get(symbol, pd.DataFrame())
+        elif data_type == 'open_interest':
+            data = self.open_interest_data.get(symbol, pd.DataFrame())
+        elif data_type == 'perpetual_trades':
+            data = self.perpetual_trades_data.get(symbol, pd.DataFrame())
+        else:
+            return pd.DataFrame()
+        
+        if data.empty:
+            return data
+            
+        # Filter data up to timestamp
+        return data[data['timestamp'] <= timestamp].copy()
+    
+    def get_comprehensive_data_at_time(self, symbol: str, timestamp: datetime) -> Dict[str, pd.DataFrame]:
+        """Get all available data types for a symbol at a specific timestamp"""
+        return {
+            'spot_ohlcv': self.get_data_at_time(symbol, timestamp, 'spot_ohlcv'),
+            'spot_trades': self.get_data_at_time(symbol, timestamp, 'spot_trades'),
+            'perpetual_mark_ohlcv': self.get_data_at_time(symbol, timestamp, 'perpetual_mark_ohlcv'),
+            'perpetual_index_ohlcv': self.get_data_at_time(symbol, timestamp, 'perpetual_index_ohlcv'),
+            'funding_rates': self.get_data_at_time(symbol, timestamp, 'funding_rates'),
+            'open_interest': self.get_data_at_time(symbol, timestamp, 'open_interest'),
+            'perpetual_trades': self.get_data_at_time(symbol, timestamp, 'perpetual_trades')
+        }
+
+
+
 class HistoricalDataCollector:
+
     def __init__(self, data_dir="historical_data", days=None, symbols=None):
         """Initialize historical data collector for both spot and perpetual data"""
         self.data_dir = Path(data_dir)

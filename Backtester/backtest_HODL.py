@@ -19,10 +19,11 @@ import logging
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
 
-from backtester import Backtester
-from strategy_adapter import run_backtest_with_strategy
+from backtester import BacktesterOMS
 from hist_data import HistoricalDataCollector
 
+sys.path.append(str(Path(__file__).parent.parent))
+from strategies.v1_hold import HoldStrategy
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -49,33 +50,6 @@ def collect_historical_data():
     collector.collect_comprehensive_data(timeframe='1h')
     print("Historical data collection completed!")
 
-
-def run_demo_strategy_backtest():
-    """Run backtest with the demo strategy"""
-    print("\n" + "="*60)
-    print("RUNNING DEMO STRATEGY BACKTEST")
-    print("="*60)
-    
-    # 3. Initialize backtester and change balance and symbols
-    backtester = Backtester(
-        historical_data_dir="historical_data",
-        initial_balance=10000.0,
-        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"]
-    )
-    
-    # 4. Run backtest and change strategies and start date/end date and timestep
-    results = run_backtest_with_strategy(
-        backtester,
-        strategy_name="HODL",
-        start_date=datetime.now() - timedelta(days=1),
-        end_date=datetime.now(),
-        time_step=timedelta(hours=1)
-    )
-    
-    backtester.print_results(results)
-    
-    return results
-
 def plot_performance(demo_results):
     """Plot performance comparison"""
     try:
@@ -86,7 +60,7 @@ def plot_performance(demo_results):
         
 
         plt.subplot(2, 2, 1)
-        plt.plot(demo_results['portfolio_values'], label='Demo Strategy', alpha=0.8)
+        plt.plot(demo_results['portfolio_values'], label='Hold Strategy', alpha=0.8)
         plt.title('Portfolio Value Over Time')
         plt.xlabel('Time Steps')
         plt.ylabel('Portfolio Value (USDT)')
@@ -104,7 +78,7 @@ def plot_performance(demo_results):
                 demo_peak = value
             demo_drawdown.append((demo_peak - value) / demo_peak)
         
-        plt.plot(demo_drawdown, label='Demo Strategy', alpha=0.8)
+        plt.plot(demo_drawdown, label='Hold Strategy', alpha=0.8)
         plt.plot(funding_drawdown, label='Funding Rate Strategy', alpha=0.8)
         plt.title('Drawdown Over Time')
         plt.xlabel('Time Steps')
@@ -123,7 +97,7 @@ def plot_performance(demo_results):
         x = range(len(metrics))
         width = 0.35
         
-        plt.bar([i - width/2 for i in x], demo_values, width, label='Demo Strategy', alpha=0.8)
+        plt.bar([i - width/2 for i in x], demo_values, width, label='Hold Strategy', alpha=0.8)
       
         
         plt.title('Performance Metrics Comparison')
@@ -177,6 +151,29 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
+    backtester = BacktesterOMS(
+        historical_data_dir="historical_data",
+    )
+    
+    # 4. Run backtest and change strategies and start date/end date and timestep
+
+    results = backtester.run_backtest(strategy_class=HoldStrategy, 
+    symbols=["BTC-USDT-PERP", "ETH-USDT-PERP", "SOL-USDT-PERP"],
+    start_date=datetime.now() - timedelta(days=7), 
+    end_date=datetime.now(), time_step=timedelta(hours=1))
+
+    
+    backtester.print_results(results)
+
+    # Analyze trades
+    # analyze_trades(results, "Hold Strategy")
+    
+    # Plot results
+    # plot_performance(results)
+    
+    # Save results
+    results_summary = {
+        'hold_strategy': results}
 
     data_dir = Path("historical_data")
     if not data_dir.exists() or not any(data_dir.iterdir()):
@@ -185,21 +182,7 @@ def main():
     else:
         print("Historical data found. Skipping data collection.")
     
-    # Run backtests
-    demo_results = run_demo_strategy_backtest()
-
-    # Analyze trades
-    analyze_trades(demo_results, "Demo Strategy")
-    
-    # Plot results
-    plot_performance(demo_results)
-    
-    # Save results
-    results_summary = {
-        'demo_strategy': demo_results}
-        
     import json
-    from datetime import datetime
     
     with open('backtest_results.json', 'w') as f:
         # Convert various types for JSON serialization
