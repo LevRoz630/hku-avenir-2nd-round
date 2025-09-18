@@ -42,7 +42,8 @@ class BacktesterOMS:
         self.performance_metrics = {}
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
-        
+        self.symbols = []  # Will be set by backtester
+        self.portfolio_values = []
     def set_data_manager(self, data_manager):
         """Set the data manager for price fetching"""
         self.data_manager = data_manager
@@ -211,9 +212,11 @@ class BacktesterOMS:
         total_value = self.balance.get('USDT', 0)
         print(f"debug total value get_total_portfolio_value:{total_value}")
 
+        print(f"debug positions:{self.positions}")
         # Add value of perpetual positions
         for symbol, pos in self.positions.items():
             pos_value = pos['value']
+            print(f"debug pos_value:{pos_value}")
             total_value += pos_value
         return total_value  
 
@@ -241,150 +244,10 @@ class BacktesterOMS:
         
         return summary
 
-class Backtester:
-    """
-    Main backtester class that provides OMS-compatible interface for testing strategies
-    """
-    
-    def __init__(self, 
-                 historical_data_dir: str = "historical_data",
-                 initial_balance: float = 10000.0,
-                 symbols: List[str] = None):
         
-        self.historical_data_dir = historical_data_dir
-        self.symbols = symbols 
-        # Initialize components
-        self.data_manager = HistoricalDataManager(historical_data_dir)
-        self.oms_client = BacktesterOMS(historical_data_dir)
-        
-        # Set initial balance and connect data manager
-        self.oms_client.balance = {"USDT": initial_balance}
-        self.oms_client.set_data_manager(self.data_manager)
-        
-        # Load historical data
-        self.data_manager.load_historical_data(self.symbols)
-        
-        # Backtesting state
-        self.current_time = None
-        self.start_time = None
-        self.end_time = None
-        self.time_step = timedelta(hours=1)  # Default 1-hour steps
-        
-        # Performance tracking
-        self.portfolio_values = []
-        self.daily_returns = []
-        self.max_drawdown = 0
-        self.sharpe_ratio = 0
-        
-        self.initial_balance = initial_balance
-        
-        logger.info(f"Backtester initialized with {len(self.symbols)} symbols")
-    
-    def get_spot_ohlcv_data(self) -> Dict[str, pd.DataFrame]:
-        """Get spot OHLCV data - compatible with strategy interface"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'spot_ohlcv')
-        return data
-    
-    def get_perpetual_mark_ohlcv_data(self) -> Dict[str, pd.DataFrame]:
-        """Get perpetual mark price OHLCV data"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'perpetual_mark_ohlcv')
-        return data
-    
-    def get_perpetual_index_ohlcv_data(self) -> Dict[str, pd.DataFrame]:
-        """Get perpetual index price OHLCV data"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'perpetual_index_ohlcv')
-        return data
-    
-    def get_spot_trades_data(self) -> Dict[str, pd.DataFrame]:
-        """Get spot trades data"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'spot_trades')
-        return data
-    
-    def get_perpetual_trades_data(self) -> Dict[str, pd.DataFrame]:
-        """Get perpetual trades data"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'perpetual_trades')
-        return data
-    
-    def get_funding_rate_data(self, periods: int = 10) -> Dict[str, pd.DataFrame]:
-        """Get funding rate data - compatible with strategy interface"""
-        data = {}
-        for symbol in self.symbols:
-            df = self.data_manager.get_data_at_time(symbol, self.current_time, 'funding_rates')
-            if not df.empty and len(df) >= periods:
-                # Get last N periods
-                data[symbol] = df.tail(periods * 8).copy()  # 8 hours per period
-            else:
-                data[symbol] = df
-        return data
-    
-    def get_open_interest_data(self) -> Dict[str, pd.DataFrame]:
-        """Get open interest data - compatible with strategy interface"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_data_at_time(symbol, self.current_time, 'open_interest')
-        return data
-    
-    def get_comprehensive_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
-        """Get all available data types for all symbols"""
-        data = {}
-        for symbol in self.symbols:
-            data[symbol] = self.data_manager.get_comprehensive_data_at_time(symbol, self.current_time)
-        return data
-    
-    # Legacy method for backward compatibility
-    def get_historical_data(self) -> Dict[str, pd.DataFrame]:
-        """Get historical OHLCV data - compatible with strategy interface (legacy method)"""
-        return self.get_perpetual_mark_ohlcv_data()  # Default to perpetual mark price for backward compatibility
-    
-    def get_account_balance(self) -> Dict[str, float]:
-        """Get account balance - compatible with strategy interface"""
-        balance_dict = {}
-        for balance in self.oms_client.get_balance():
-            balance_dict[balance['asset']] = float(balance['balance'])
-        return balance_dict
-    
-    def get_current_positions(self) -> List[Dict[str, Any]]:
-        """Get current positions - compatible with strategy interface"""
-        return self.oms_client.get_position()
-    
-    def push_target_positions(self, positions: Dict[str, float], instrument_type: str):
-        """Push target positions - compatible with strategy interface
-        
-        Args:
-            positions: Target position dictionary {symbol: target_value(USDT)}
-            instrument_type: Instrument type (future, spot)
-        """
-        if instrument_type != 'future' and instrument_type != 'spot':
-            raise ValueError(f"Invalid instrument type: {instrument_type}")
-        
-        for symbol, target_value in positions.items():
-            if abs(target_value) > 0:
-                position_side = "LONG" if target_value >= 0 else "SHORT"
-                self.oms_client.set_target_position(
-                    symbol=symbol,
-                    instrument_type=instrument_type,
-                    target_value=abs(target_value),
-                    position_side=position_side
-                )
-    
-    def show_account_detail(self):
-        """Show account details - compatible with strategy interface"""
-        logger.info("==== Account Details ====")
-        logger.info(f"Account Balance: {self.get_account_balance()}")
-        logger.info(f"Current Positions: {self.get_current_positions()}")
-    
     def run_backtest(self, 
-                     strategy_class,
+                     strategy_class: Any,
+                     symbols: List[str],
                      start_date: datetime = None,
                      end_date: datetime = None,
                      time_step: timedelta = None) -> Dict[str, Any]:
@@ -400,40 +263,40 @@ class Backtester:
         Returns:
             Dictionary with backtest results and performance metrics
         """
-        
-        # Set up time range
-        if start_date is None:
-            start_date = self._get_earliest_data_time()
-        if end_date is None:
-            end_date = self._get_latest_data_time()
-        if time_step is None:
-            time_step = timedelta(hours=1)
-            
-        self.start_time = start_date
-        self.end_time = end_date
-        self.time_step = time_step
-        
-        logger.info(f"Starting backtest from {start_date} to {end_date}")
-        logger.info(f"Running data from {start_date}")
-        # Initialize strategy
-        strategy = strategy_class(self)
-        
+                # Pass on all the attributes of the class to the trategy for execution
+        strategy = strategy_class(symbols=symbols)
+
+        # Pass on all the attributes of the class to the strategy for execution
+        for attr_name in dir(self):
+            if not attr_name.startswith('_'):
+                setattr(strategy, attr_name, getattr(self, attr_name))
+        print(strategy.__dict__)
         # Run backtest
-        self.current_time = start_date
         iteration = 0
-        
-        while self.current_time <= end_date:
+        strategy.current_time = start_date
+        strategy.start_time = start_date
+        strategy.end_time = end_date
+        strategy.time_step = time_step
+        strategy.portfolio_values = []
+        strategy.daily_returns = []
+        strategy.max_drawdown = 0
+        strategy.sharpe_ratio = 0
+        strategy.trade_history = []
+        strategy.final_balance = 0
+        strategy.final_positions = []
+
+        while strategy.current_time <= end_date:
             try:
                 # Update OMS client's current time
-                self.oms_client.set_current_time(self.current_time)
-                
+                strategy.set_current_time(strategy.current_time)
+
                 # Update strategy's current time
-                strategy.current_time = self.current_time
+                strategy.current_time = strategy.current_time
                 
-                total_value = self.oms_client.get_total_portfolio_value()
+                total_value = strategy.get_total_portfolio_value()
                 print(f"debug total value:{total_value}")
-                self.portfolio_values.append(total_value)
-                summary = self.oms_client.get_position_summary()
+                strategy.portfolio_values.append(total_value)
+                summary = strategy.get_position_summary()
                 logger.info(f"Total Portfolio Value: {total_value}")
                 logger.info(f"Position Summary: {summary}")
 
@@ -441,85 +304,34 @@ class Backtester:
                
                 
                 # Move to next time step
-                self.current_time += time_step
+                strategy.current_time += time_step
                 iteration += 1
                 
                 # Log progress every 24 iterations (daily if hourly steps)
                 if iteration % 24 == 0:
-                    logger.info(f"Backtest progress: {self.current_time} (Iteration {iteration})")
+                    logger.info(f"Backtest progress: {strategy.current_time} (Iteration {iteration})")
                     
             except Exception as e:
                 logger.error(f"Error in backtest iteration {iteration}: {e}")
-                self.current_time += time_step
+                strategy.current_time += time_step
                 continue
         
         # Calculate final performance metrics
-        self._calculate_performance_metrics()
+        strategy.calculate_performance_metrics()
         
         # Return results
         return {
-            'portfolio_values': self.portfolio_values,
-            'daily_returns': self.daily_returns,
-            'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
-            'max_drawdown': self.max_drawdown,
-            'sharpe_ratio': self.sharpe_ratio,
-            'trade_history': self.oms_client.trade_history,
-            'final_balance': self.get_account_balance(),
-            'final_positions': self.get_current_positions()
+            'portfolio_values': strategy.portfolio_values,
+            'daily_returns': strategy.daily_returns,
+            'total_return': (strategy.portfolio_values[-1] / strategy.portfolio_values[0] - 1) if strategy.portfolio_values else 0,
+            'max_drawdown': strategy.max_drawdown,
+            'sharpe_ratio': strategy.sharpe_ratio,
+            'trade_history': strategy.trade_history,
+            'final_balance': strategy.get_account_balance(),
+            'final_positions': strategy.get_position()
         }
-    
-    def _get_earliest_data_time(self) -> datetime:
-        """Get earliest timestamp from all loaded data"""
-        earliest = None
-        
-        # Check all data types for earliest timestamp
-        all_data_sources = [
-            self.data_manager.spot_ohlcv_data,
-            self.data_manager.spot_trades_data,
-            self.data_manager.perpetual_mark_ohlcv_data,
-            self.data_manager.perpetual_index_ohlcv_data,
-            self.data_manager.funding_data,
-            self.data_manager.open_interest_data,
-            self.data_manager.perpetual_trades_data
-        ]
-        
-        for data_source in all_data_sources:
-            for symbol in self.symbols:
-                data = data_source.get(symbol, pd.DataFrame())
-                if not data.empty:
-                    symbol_earliest = data['timestamp'].min()
-                    if earliest is None or symbol_earliest < earliest:
-                        earliest = symbol_earliest
-        
-        return earliest or datetime.now() - timedelta(days=7)
-    
-    def _get_latest_data_time(self) -> datetime:
-        """Get latest timestamp from all loaded data"""
-        latest = None
-        
-        # Check all data types for latest timestamp
-        all_data_sources = [
-            self.data_manager.spot_ohlcv_data,
-            self.data_manager.spot_trades_data,
-            self.data_manager.perpetual_mark_ohlcv_data,
-            self.data_manager.perpetual_index_ohlcv_data,
-            self.data_manager.funding_data,
-            self.data_manager.open_interest_data,
-            self.data_manager.perpetual_trades_data
-        ]
-        
-        for data_source in all_data_sources:
-            for symbol in self.symbols:
-                data = data_source.get(symbol, pd.DataFrame())
-                if not data.empty:
-                    symbol_latest = data['timestamp'].max()
-                    if latest is None or symbol_latest > latest:
-                        latest = symbol_latest
-        
-        return latest or datetime.now()
-    
-    
-    def _calculate_performance_metrics(self):
+
+    def calculate_performance_metrics(self):
         """Calculate performance metrics"""
         if len(self.portfolio_values) < 2:
             return
@@ -558,3 +370,4 @@ class Backtester:
         print(f"Final Balance: {results['final_balance']}")
         print(f"Number of Trades: {len(results['trade_history'])}")
         print("="*50)
+

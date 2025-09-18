@@ -19,8 +19,7 @@ import logging
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
 
-from backtester import Backtester
-from strategy_adapter import run_backtest_with_strategy
+from backtester import BacktesterOMS
 from hist_data import HistoricalDataCollector
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -61,7 +60,7 @@ def plot_performance(demo_results):
         
 
         plt.subplot(2, 2, 1)
-        plt.plot(demo_results['portfolio_values'], label='Demo Strategy', alpha=0.8)
+        plt.plot(demo_results['portfolio_values'], label='Hold Strategy', alpha=0.8)
         plt.title('Portfolio Value Over Time')
         plt.xlabel('Time Steps')
         plt.ylabel('Portfolio Value (USDT)')
@@ -79,7 +78,7 @@ def plot_performance(demo_results):
                 demo_peak = value
             demo_drawdown.append((demo_peak - value) / demo_peak)
         
-        plt.plot(demo_drawdown, label='Demo Strategy', alpha=0.8)
+        plt.plot(demo_drawdown, label='Hold Strategy', alpha=0.8)
         plt.plot(funding_drawdown, label='Funding Rate Strategy', alpha=0.8)
         plt.title('Drawdown Over Time')
         plt.xlabel('Time Steps')
@@ -98,7 +97,7 @@ def plot_performance(demo_results):
         x = range(len(metrics))
         width = 0.35
         
-        plt.bar([i - width/2 for i in x], demo_values, width, label='Demo Strategy', alpha=0.8)
+        plt.bar([i - width/2 for i in x], demo_values, width, label='Hold Strategy', alpha=0.8)
       
         
         plt.title('Performance Metrics Comparison')
@@ -152,32 +151,29 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
-    backtester = Backtester(
+    backtester = BacktesterOMS(
         historical_data_dir="historical_data",
-        initial_balance=10000.0,
-        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"]
     )
     
     # 4. Run backtest and change strategies and start date/end date and timestep
 
-    results = backtester.run_backtest(
-        strategy_class=HoldStrategy,
-        start_date=datetime.now() - timedelta(days=7),
-        end_date=datetime.now(),
-        time_step=timedelta(hours=1)
-    )
+    results = backtester.run_backtest(strategy_class=HoldStrategy, 
+    symbols=["BTC-USDT-PERP", "ETH-USDT-PERP", "SOL-USDT-PERP"],
+    start_date=datetime.now() - timedelta(days=7), 
+    end_date=datetime.now(), time_step=timedelta(hours=1))
+
     
     backtester.print_results(results)
 
     # Analyze trades
-    analyze_trades(results, "Demo Strategy")
+    # analyze_trades(results, "Hold Strategy")
     
     # Plot results
-    plot_performance(results)
+    # plot_performance(results)
     
     # Save results
     results_summary = {
-        'demo_strategy': results}
+        'hold_strategy': results}
 
     data_dir = Path("historical_data")
     if not data_dir.exists() or not any(data_dir.iterdir()):
@@ -186,6 +182,7 @@ def main():
     else:
         print("Historical data found. Skipping data collection.")
     
+    import json
     
     with open('backtest_results.json', 'w') as f:
         # Convert various types for JSON serialization
