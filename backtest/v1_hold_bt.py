@@ -136,17 +136,17 @@ def main():
 
     results = backtester.run_backtest(strategy_class=HoldStrategy, 
     symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
-    start_date=datetime.now() - timedelta(days = 1), 
+    start_date=datetime.now() - timedelta(days = 15), 
     end_date=datetime.now(), time_step=timedelta(hours=1))
 
     
     backtester.print_results(results)
 
-    # Analyze trades
+    # # Analyze trades
     # analyze_trades(results, "Hold Strategy")
     
     # Plot results
-    # plot_performance(results)
+    plot_performance(results)
     
     # Save results
     results_summary = {
@@ -154,37 +154,6 @@ def main():
 
     data_dir = Path("historical_data")
 
-    import json
-    
-    with open('backtest_results.json', 'w') as f:
-        # Convert various types for JSON serialization
-        def convert_for_json(obj):
-            if hasattr(obj, 'item'):
-                return obj.item()
-            elif hasattr(obj, 'tolist'):
-                return obj.tolist()
-            elif isinstance(obj, datetime):
-                return obj.isoformat()
-            elif isinstance(obj, dict):
-                return {k: convert_for_json(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_for_json(item) for item in obj]
-            elif hasattr(obj, '__dict__'):
-                # Convert objects to dict, excluding circular references
-                try:
-                    return {k: convert_for_json(v) for k, v in obj.__dict__.items() 
-                           if not k.startswith('_')}
-                except:
-                    return str(obj)
-            else:
-                return obj
-        
-        # Clean the results to avoid circular references
-        clean_results = convert_for_json(results_summary)
-        json.dump(clean_results, f, indent=2)
-    
-    print("\nBacktest results saved to 'backtest_results.json'")
-    print("Backtest analysis completed!")
 
 if __name__ == "__main__":
     main()
