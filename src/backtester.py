@@ -3,7 +3,8 @@ from typing import List, Dict, Any
 from oms_simulation import BacktesterOMS
 import logging
 import numpy as np
-from hist_data import HistoricalDataManager
+from pathlib import Path
+from hist_data import HistoricalDataManager, HistoricalDataCollector
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +30,54 @@ class Backtester:
                         end_date: datetime = None,
                         time_step: timedelta = None) -> Dict[str, Any]:
         """
-        Run backtest with a strategy class
-        
+        Execute a strategy over historical data and return performance.
+
+        - Ensures data exists (downloads if missing)
+        - Loads data into memory via HistoricalDataManager
+        - Aligns start_time to first available candle
+        - Iterates time, lets strategy place orders via OMS
+        - Aggregates portfolio values and computes metrics
+
         Args:
-            strategy_class: Strategy class to test
-            start_date: Start date for backtest
-            end_date: End date for backtest
-            time_step: Time step for backtest iteration
-            
+            strategy_class: Strategy class to instantiate
+            symbols: Symbols to backtest (supports -PERP for perps)
+            start_date: Start datetime (aligned to first data if earlier)
+            end_date: End datetime
+            time_step: Time delta between backtest iterations
+
         Returns:
-            Dictionary with backtest results and performance metrics
+            Results dict with PnL series and summary metrics
         """
-        self.oms_client.set_data_manager(HistoricalDataManager(data_dir=self.historical_data_dir))
-        # Normalize symbols for data loading (historical files are keyed by base symbols)
+        # Ensure historical data exists; download if missing
+        data_path = Path(self.historical_data_dir)
         base_symbols = [s.replace('-PERP', '') for s in symbols]
-        self.oms_client.data_manager.load_historical_data(base_symbols)
+        if (not data_path.exists()) or (not any(data_path.iterdir())):
+            logger.info("No historical data found. Collecting data...")
+            collector = HistoricalDataCollector(data_dir=str(data_path), days=(end_date - start_date).days + 1, symbols=base_symbols)
+            collector.collect_comprehensive_data(timeframe='1h')
+            logger.info("Historical data collection completed")
+
+        # Initialize data manager and load into memory
+        self.oms_client.set_data_manager(HistoricalDataManager(data_dir=self.historical_data_dir))
+        dm = self.oms_client.data_manager
+        dm.load_historical_data(base_symbols)
+
+        # Align start time to earliest available data so prices exist at t0
+        earliest_ts = None
+        for sym in base_symbols:
+            for store in [dm.spot_ohlcv_data, dm.perpetual_mark_ohlcv_data, dm.perpetual_index_ohlcv_data]:
+                df = store.get(sym)
+                if df is not None and not df.empty:
+                    first = df['timestamp'].min()  # first available candle for this store
+                    earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
+        aligned_start = start_date
+        if earliest_ts is not None and start_date < earliest_ts:
+            aligned_start = earliest_ts
+
         strategy = strategy_class(symbols=symbols, oms_client=self.oms_client)
-        self.start_time = start_date
+        self.start_time = aligned_start
         self.end_time = end_date
-        self.current_time = start_date
+        self.current_time = aligned_start
         if time_step is None:
             time_step = timedelta(hours=1)
         # Run backtest
@@ -61,6 +91,7 @@ class Backtester:
                 # Update strategy's current time
                 self.current_time = self.current_time
                 
+                # Revalue portfolio at the current timestamp
                 total_value = self.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 summary = self.oms_client.get_position_summary()
@@ -73,7 +104,6 @@ class Backtester:
                 # Move to next time step
                 self.current_time += time_step
                 iteration += 1
-                self.oms_client.get_position_summary()
                 
                 # Log progress every 24 iterations (daily if hourly steps)
                 if iteration % 24 == 0:

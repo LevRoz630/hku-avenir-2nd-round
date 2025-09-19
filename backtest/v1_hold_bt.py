@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-Backtest Example - How to use the backtester with existing trading strategies
-
-This script demonstrates how to:
-1. Collect historical data
-2. Run backtests with existing strategies
-3. Compare different strategies
-4. Analyze results
+Example: Run HODL strategy using the backtester.
+- Ensures data exists (via backtester)
+- Executes strategy and plots/prints summary
 """
 
 import os
@@ -23,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from backtester import Backtester
 from strategies.v1_hold import HoldStrategy
+from hist_data import HistoricalDataCollector
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -128,15 +125,19 @@ def main():
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
     
+    # Resolve data dir at repo root
+    hist_dir = Path(__file__).parents[2] / "historical_data"
+
+
     backtester = Backtester(
-        historical_data_dir="historical_data",
+        historical_data_dir=str(hist_dir),
     )
     
     # 4. Run backtest and change strategies and start date/end date and timestep
 
     results = backtester.run_backtest(strategy_class=HoldStrategy, 
     symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
-    start_date=datetime.now() - timedelta(days = 15), 
+    start_date=datetime.now() - timedelta(days = 1), 
     end_date=datetime.now(), time_step=timedelta(hours=1))
 
     

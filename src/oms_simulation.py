@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-f"""
-Comprehensive Backtester for Trading Strategies
-Compatible with existing OMS-based trading strategies with minimal code changes.
-
-This backtester provides OMS-compatible functions that work with historical data
-instead of live trading, allowing you to test strategies without modification.
-
-Notes:
-To accomodate different types of historical data, in their repsective functions of _load_()_data ensure to change the timeframes/days
-how does hisotircal data work because there are different time frames, and trades at different time steps
-target_value position needs to be updated because isa ctually not positions but in USDT so need to see 
-margin and leverage need to be considered
+"""
+OMS-compatible simulation layer used by the backtester.
+Provides order/position operations (spot and perpetual), portfolio valuation,
+and a consistent interface for strategies to trade against historical data.
 """
 
 import pandas as pd
@@ -29,9 +21,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class BacktesterOMS:
-    """
-    Fully functional OMS client for backtesting that tracks positions for perpetuals and balances for spot.
-    Provides the same interface as the real OMS client but uses historical data for backtesting.
+    """Order Management System abstraction for backtests.
+
+    - Tracks balances and symbol positions
+    - Converts target USDT to quantity at current price
+    - Records trade history and realized PnL on close/flip
+    - Serves prices via HistoricalDataManager with per-timestep caching
     """
     
     def __init__(self, historical_data_dir: str = "../historical_data"):
@@ -53,12 +48,13 @@ class BacktesterOMS:
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
-        # Invalidate price cache when time changes
+        # Invalidate per-timestep price cache whenever the clock advances
         self._price_cache_time = current_time
         self._price_cache.clear()
 
     def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
         """Map trading symbol to data key used by HistoricalDataManager."""
+        # Futures files are stored under base symbols; strip the -PERP suffix for lookups
         if instrument_type in ("future", "mark", "index"):
             return symbol.replace('-PERP', '')
         return symbol
@@ -72,7 +68,7 @@ class BacktesterOMS:
         return {asset: float(balance) for asset, balance in self.balance.items()}
     
     def get_position(self) -> List[Dict[str, Any]]:
-        """Get current positions - compatible with OMS interface"""
+        """Return current non-zero positions with live valuation and PnL."""
         positions = []
         for symbol, pos in self.positions.items():
             instrument_type = 'future' if symbol.endswith('-PERP') else 'spot'
@@ -98,7 +94,7 @@ class BacktesterOMS:
     
     def set_target_position(self, symbol: str, instrument_type: str, 
                           target_value: float, position_side: str) -> Dict[str, Any]:
-        """Set target position - compatible with OMS interface"""
+        """Place/adjust a position using target USDT value; supports CLOSE to exit."""
         try:
 
             if instrument_type == "future":
@@ -118,11 +114,12 @@ class BacktesterOMS:
         if not current_price:
             raise ValueError(f"Unable to get current price for {symbol}")
 
-        # Treat incoming value as USDT to spend, convert to quantity
+        # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
         if trade_value > self.balance['USDT']:
             raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
 
+        # Convert USDT → base-asset quantity at current mark/index price
         trade_qty = trade_value / current_price
 
         # Ensure a position object exists for this symbol
@@ -140,7 +137,7 @@ class BacktesterOMS:
         current_entry_price = float(pos.get('entry_price', 0.0))
 
         if position_side == current_side:
-            # Increase position on same side
+            # Add to an existing position on the same side, update VWAP entry_price
             self.balance['USDT'] -= trade_value
             new_qty = current_quantity + trade_qty
             pos['quantity'] = new_qty
@@ -151,8 +148,8 @@ class BacktesterOMS:
             pos['side'] = position_side
 
         elif position_side != current_side:
-            # Close opposite side, realize PnL, then open new side
-            pnl = self.calculate_positions_pnl(symbol, instrument_type)
+            # Flip side: realize PnL on the old side, then open a fresh position
+            pnl = self.pnl_close_position(symbol, instrument_type)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.balance['USDT'] += (pnl or 0.0)
             self.balance['USDT'] -= trade_value
@@ -163,8 +160,8 @@ class BacktesterOMS:
             pos['instrument_type'] = instrument_type
 
         elif position_side == 'CLOSE':
-            # Close the position and realize PnL
-            pnl = self.calculate_positions_pnl(symbol, instrument_type)
+            # Explicit close: realize PnL and zero out the position
+            pnl = self.pnl_close_position(symbol, instrument_type)
             self.balance['USDT'] += (pnl or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
@@ -178,6 +175,7 @@ class BacktesterOMS:
         else:
             raise ValueError(f"Invalid position side: {position_side}")
        
+        # Persist an immutable record of the action with post-trade state
         self.trade_history.append({
             'timestamp': self.current_time or datetime.now(),
             'symbol': symbol,
@@ -201,13 +199,13 @@ class BacktesterOMS:
         if not self.data_manager or not self.current_time:
             return None
 
-        # Serve from cache if available for this timestamp
+        # Serve from cache if available for this backtest timestamp
         cache_key = (symbol, instrument_type)
         if self._price_cache_time == self.current_time and cache_key in self._price_cache:
             return self._price_cache[cache_key]
 
         try:
-            # Normalize to data keys (base symbols like BTC-USDT)
+            # Normalize to data keys (files are stored under base symbols like BTC-USDT)
             base_symbol = self._normalize_symbol(symbol, instrument_type)
             if instrument_type == 'mark':
                 ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'perpetual_mark_ohlcv')
@@ -229,7 +227,7 @@ class BacktesterOMS:
         
         return None
     
-    def calculate_positions_pnl(self, symbol: str, instrument_type: str):
+    def pnl_close_position(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""
         current_price = self.get_current_price(symbol, instrument_type)
         pos = self.positions[symbol]

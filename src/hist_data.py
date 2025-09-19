@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Historical Data Collector - Fetches comprehensive historical data for multiple days
-Collects: OHLCV, funding rates, open interest, trades, and more for extended periods
+Historical data layer:
+- HistoricalDataManager: loads CSVs into memory and serves time-filtered slices
+- HistoricalDataCollector: optionally downloads CSVs from CCXT when missing
 """
 
 import pandas as pd
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class HistoricalDataManager:
-    """Manages loading and accessing historical data for backtesting"""
+    """Load and serve historical data required by the backtester/OMS."""
     
     def __init__(self, data_dir: str = "historical_data"):
         self.data_dir = Path(data_dir)
@@ -40,7 +41,7 @@ class HistoricalDataManager:
         if data_types is None:
             data_types = ['spot_ohlcv', 'spot_trades', 'perpetual_mark_ohlcv', 'perpetual_index_ohlcv', 'funding_rates', 'open_interest', 'perpetual_trades']
             
-        logger.info(f"Loading comprehensive historical data for {len(symbols)} symbols...")
+        logger.info(f"Loading historical data for {len(symbols)} symbols...")
         
         for symbol in symbols:
             # Load spot data
@@ -65,95 +66,103 @@ class HistoricalDataManager:
     
     def _load_spot_ohlcv_data(self, symbol: str) -> pd.DataFrame:
         """Load spot OHLCV data for a symbol"""
+        from glob import glob
         for timeframe in ['1m', '5m', '15m', '1h', '1d']:
-            for days in [1, 7, 30, 90]:
-                filename = f"spot_{symbol}_{timeframe}_{days}d.csv"
-                filepath = self.data_dir / filename
-                if filepath.exists():
-                    df = pd.read_csv(filepath)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    return df
+            # Accept any days suffix (e.g., 2d, 30d, 90d)
+            pattern = str(self.data_dir / f"spot_{symbol}_{timeframe}_*d.csv")
+            matches = glob(pattern)
+            if matches:
+                filepath = Path(sorted(matches)[-1])
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
         
         logger.warning(f"No spot OHLCV data found for {symbol}")
         return pd.DataFrame()
     
     def _load_spot_trades_data(self, symbol: str) -> pd.DataFrame:
         """Load spot trades data for a symbol"""
-        for days in [1, 7, 30, 90]:
-            filename = f"spot_{symbol}_trades_{days}d.csv"
-            filepath = self.data_dir / filename
-            if filepath.exists():
-                df = pd.read_csv(filepath)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                return df
+        from glob import glob
+        pattern = str(self.data_dir / f"spot_{symbol}_trades_*d.csv")
+        matches = glob(pattern)
+        if matches:
+            filepath = Path(sorted(matches)[-1])
+            df = pd.read_csv(filepath)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
         
         logger.warning(f"No spot trades data found for {symbol}")
         return pd.DataFrame()
     
     def _load_perpetual_mark_ohlcv_data(self, symbol: str) -> pd.DataFrame:
         """Load perpetual mark price OHLCV data for a symbol"""
+        from glob import glob
         for timeframe in ['1m', '5m', '15m', '1h', '1d']:
-            for days in [1, 7, 30, 90]:
-                filename = f"perpetual_{symbol}_mark_{timeframe}_{days}d.csv"
-                filepath = self.data_dir / filename
-                if filepath.exists():
-                    df = pd.read_csv(filepath)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    return df
+            pattern = str(self.data_dir / f"perpetual_{symbol}_mark_{timeframe}_*d.csv")
+            matches = glob(pattern)
+            if matches:
+                filepath = Path(sorted(matches)[-1])
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
         
         logger.warning(f"No perpetual mark OHLCV data found for {symbol}")
         return pd.DataFrame()
     
     def _load_perpetual_index_ohlcv_data(self, symbol: str) -> pd.DataFrame:
         """Load perpetual index price OHLCV data for a symbol"""
+        from glob import glob
         for timeframe in ['1m', '5m', '15m', '1h', '1d']:
-            for days in [1, 7, 30, 90]:
-                filename = f"perpetual_{symbol}_index_{timeframe}_{days}d.csv"
-                filepath = self.data_dir / filename
-                if filepath.exists():
-                    df = pd.read_csv(filepath)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    return df
+            pattern = str(self.data_dir / f"perpetual_{symbol}_index_{timeframe}_*d.csv")
+            matches = glob(pattern)
+            if matches:
+                filepath = Path(sorted(matches)[-1])
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
         
         logger.warning(f"No perpetual index OHLCV data found for {symbol}")
         return pd.DataFrame()
     
     def _load_funding_data(self, symbol: str) -> pd.DataFrame:
         """Load funding rate data for a symbol"""
-        for days in [1, 7, 30, 90]:
-            filename = f"perpetual_{symbol}_funding_rates_{days}d.csv"
-            filepath = self.data_dir / filename
-            if filepath.exists():
-                df = pd.read_csv(filepath)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                return df
+        from glob import glob
+        pattern = str(self.data_dir / f"perpetual_{symbol}_funding_rates_*d.csv")
+        matches = glob(pattern)
+        if matches:
+            filepath = Path(sorted(matches)[-1])
+            df = pd.read_csv(filepath)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
         
         logger.warning(f"No funding rate data found for {symbol}")
         return pd.DataFrame()
     
     def _load_open_interest_data(self, symbol: str) -> pd.DataFrame:
         """Load open interest data for a symbol"""
+        from glob import glob
         for timeframe in ['5m', '15m', '1h']:
-            for days in [1, 7, 30, 90]:
-                filename = f"perpetual_{symbol}_open_interest_{days}d_{timeframe}.csv"
-                filepath = self.data_dir / filename
-                if filepath.exists():
-                    df = pd.read_csv(filepath)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    return df
+            pattern = str(self.data_dir / f"perpetual_{symbol}_open_interest_*d_{timeframe}.csv")
+            matches = glob(pattern)
+            if matches:
+                filepath = Path(sorted(matches)[-1])
+                df = pd.read_csv(filepath)
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
         
         logger.warning(f"No open interest data found for {symbol}")
         return pd.DataFrame()
     
     def _load_perpetual_trades_data(self, symbol: str) -> pd.DataFrame:
         """Load perpetual trades data for a symbol"""
-        for days in [1, 7, 30, 90]:
-            filename = f"perpetual_{symbol}_trades_{days}d.csv"
-            filepath = self.data_dir / filename
-            if filepath.exists():
-                df = pd.read_csv(filepath)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                return df
+        from glob import glob
+        pattern = str(self.data_dir / f"perpetual_{symbol}_trades_*d.csv")
+        matches = glob(pattern)
+        if matches:
+            filepath = Path(sorted(matches)[-1])
+            df = pd.read_csv(filepath)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
         
         logger.warning(f"No perpetual trades data found for {symbol}")
         return pd.DataFrame()
