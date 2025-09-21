@@ -35,6 +35,33 @@ class HistoricalDataManager:
         self.open_interest_data = {}
         self.perpetual_trades_data = {}
     
+    def load_historical_data(self, symbols: List[str]) -> None:
+        """Load available historical data for provided base symbols into memory.
+
+        This populates:
+        - spot_ohlcv_data
+        - perpetual_mark_ohlcv_data
+        - perpetual_index_ohlcv_data
+
+        Note: symbols should be base symbols like 'BTC-USDT' (without -PERP).
+        """
+        for symbol in symbols:
+            try:
+                # Spot OHLCV (if available)
+                spot_df = self._load_spot_ohlcv_data(symbol)
+                if not spot_df.empty:
+                    self.spot_ohlcv_data[symbol] = spot_df
+                # Perpetual mark OHLCV
+                mark_df = self._load_perpetual_mark_ohlcv_data(symbol)
+                if not mark_df.empty:
+                    self.perpetual_mark_ohlcv_data[symbol] = mark_df
+                # Perpetual index OHLCV
+                index_df = self._load_perpetual_index_ohlcv_data(symbol)
+                if not index_df.empty:
+                    self.perpetual_index_ohlcv_data[symbol] = index_df
+            except Exception as e:
+                logger.error(f"Failed loading data for {symbol}: {e}")
+    
     def _load_spot_ohlcv_data(self, symbol: str) -> pd.DataFrame:
         """Load spot OHLCV data for a symbol"""
         from glob import glob
@@ -198,7 +225,7 @@ class HistoricalDataCollector:
             'options': {'defaultType': 'future'}
         })
 
-        logger.info(f"Historical Data Collector initialized for {days} days")
+        logger.info(f"Historical Data Collector initialized for {self.days} days")
     
     def convert_symbol_to_ccxt(self, symbol, market_type="spot"):
         """Convert symbol format for CCXT API calls"""
@@ -752,7 +779,7 @@ class HistoricalDataCollector:
                 df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
                 
                 # Save individual symbol data
-                filename = f"{type}_{symbol}_{timeframe}_{days}d.csv"
+                filename = f"{type}_{symbol}_{timeframe}_{self.days}d.csv"
                 df.to_csv(self.data_dir / filename, index=False)
                 logger.info(f"  Saved {symbol}: {len(df):,} records to {filename}")
             else:

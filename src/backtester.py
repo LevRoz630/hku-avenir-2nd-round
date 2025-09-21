@@ -48,14 +48,34 @@ class Backtester:
         Returns:
             Results dict with PnL series and summary metrics
         """
-        # Ensure historical data exists; download if missing
+        # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
         base_symbols = [s.replace('-PERP', '') for s in symbols]
-        if (not data_path.exists()) or (not any(data_path.iterdir())):
-            logger.info("No historical data found. Collecting data...")
-            collector = HistoricalDataCollector(data_dir=str(data_path), days=(end_date - start_date).days + 1, symbols=base_symbols)
-            collector.collect_comprehensive_data(timeframe='1h')
-            logger.info("Historical data collection completed")
+        days_needed = (end_date - start_date).days + 1 if (start_date and end_date) else 90
+        data_path.mkdir(parents=True, exist_ok=True)
+
+        from glob import glob
+        collector = HistoricalDataCollector(data_dir=str(data_path), days=days_needed)
+        for sym in base_symbols:
+            try:
+                # Look for any existing files for this symbol; if none, collect
+                has_any = False
+                patterns = [
+                    str(data_path / f"perpetual_{sym}_mark_*"),
+                    str(data_path / f"perpetual_{sym}_index_*"),
+                    str(data_path / f"spot_{sym}_*"),
+                ]
+                for p in patterns:
+                    if glob(p):
+                        has_any = True
+                        break
+                if not has_any:
+                    logger.info(f"No local data for {sym}. Collecting 15m futures/spot data (~{days_needed}d)...")
+                    collector.collect_perpetual_mark_ohlcv(sym, timeframe='15m')
+                    collector.collect_perpetual_index_ohlcv(sym, timeframe='15m')
+                    collector.collect_spot_ohlcv(sym, timeframe='15m')
+            except Exception as e:
+                logger.error(f"Failed ensuring data for {sym}: {e}")
 
         # Initialize data manager and load into memory
         self.oms_client.set_data_manager(HistoricalDataManager(data_dir=self.historical_data_dir))
@@ -115,7 +135,6 @@ class Backtester:
                 continue
         
         # Calculate final performance metrics
-        
         self.calculate_performance_metrics()
         
         # Return results
@@ -135,11 +154,13 @@ class Backtester:
         if len(self.portfolio_values) < 2:
             return
             
-        # Calculate daily returns
+        # Calculate period returns (based on time_step granularity)
         self.period_returns = []
         for i in range(1, len(self.portfolio_values)):
-            period_return = (self.portfolio_values[i] - self.portfolio_values[i-1]) / self.portfolio_values[i-1] #
-            self.period_returns.append(period_return)
+            prev = self.portfolio_values[i-1]
+            curr = self.portfolio_values[i]
+            if prev > 0:
+                self.period_returns.append((curr - prev) / prev)
         
         # Calculate max drawdown
         peak = self.portfolio_values[0]
@@ -151,12 +172,12 @@ class Backtester:
             if drawdown > self.max_drawdown:
                 self.max_drawdown = drawdown
         
-        # Calculate Sharpe ratio (simplified)
-        if self.daily_returns:
-            mean_return = np.mean(self.daily_returns)
-            std_return = np.std(self.daily_returns)
+        # Calculate Sharpe ratio (use period returns; assume 24 periods/day for 1h)
+        if self.period_returns:
+            mean_return = np.mean(self.period_returns)
+            std_return = np.std(self.period_returns)
             if std_return > 0:
-                self.sharpe_ratio = mean_return / std_return * np.sqrt(252)  # Annualized
+                self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24)
 
     def print_results(self, results: Dict[str, Any]):
         """Print backtest results in a formatted way"""
