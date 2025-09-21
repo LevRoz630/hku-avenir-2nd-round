@@ -231,7 +231,7 @@ class OmsClient:
         Get user position list
         
         Returns:
-            持仓信息列表，每个元素包含交易对、持仓方向、数量、���值等信息
+            List of positions; each includes instrument, side, quantity, value
             
         Raises:
             ApiError: API call failed
