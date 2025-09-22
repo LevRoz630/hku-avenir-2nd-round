@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 import json
-from hist_data import HistoricalDataManager
+from hist_data import HistoricalDataCollector
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,10 +26,10 @@ class BacktesterOMS:
     - Tracks balances and symbol positions
     - Converts target USDT to quantity at current price
     - Records trade history and realized PnL on close/flip
-    - Serves prices via HistoricalDataManager with per-timestep caching
+    - Serves prices via HistoricalDataCollector with per-timestep caching
     """
     
-    def __init__(self, historical_data_dir: str = "../historical_data"):
+    def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
         self.balance = {"USDT": 10000.0}  # Balance for Spot trading

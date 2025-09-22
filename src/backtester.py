@@ -4,12 +4,13 @@ from oms_simulation import BacktesterOMS
 import logging
 import numpy as np
 from pathlib import Path
-from hist_data import HistoricalDataManager, HistoricalDataCollector
+from hist_data import HistoricalDataCollector
+from format_utils import format_positions_table, format_balances_table
 
 logger = logging.getLogger(__name__)
 
 class Backtester:
-    def __init__(self, historical_data_dir: str = "../historical_data"):
+    def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = historical_data_dir
         self.current_time = None
         self.start_time = None
@@ -24,7 +25,7 @@ class Backtester:
         self.final_positions = []
 
     def run_backtest(self, 
-                        strategy_class: Any,
+                        strategy: Any,
                         symbols: List[str],
                         start_date: datetime = None,
                         end_date: datetime = None,
@@ -33,13 +34,13 @@ class Backtester:
         Execute a strategy over historical data and return performance.
 
         - Ensures data exists (downloads if missing)
-        - Loads data into memory via HistoricalDataManager
+        - Loads data into memory via HistoricalDataCollector
         - Aligns start_time to first available candle
         - Iterates time, lets strategy place orders via OMS
         - Aggregates portfolio values and computes metrics
 
         Args:
-            strategy_class: Strategy class to instantiate
+            strategy: Instantiated strategy object
             symbols: Symbols to backtest (supports -PERP for perps)
             start_date: Start datetime (aligned to first data if earlier)
             end_date: End datetime
@@ -48,6 +49,23 @@ class Backtester:
         Returns:
             Results dict with PnL series and summary metrics
         """
+        # Derive timeframe string from time_step for consistent collection/loading
+        def _time_step_to_timeframe(ts: timedelta) -> str:
+            if ts is None:
+                return '1h'
+            minutes = int(ts.total_seconds() // 60)
+            if minutes == 1:
+                return '1m'
+            if minutes == 5:
+                return '5m'
+            if minutes == 15:
+                return '15m'
+            if minutes == 30:
+                return '30m'
+            if minutes == 60:
+                return '1h'
+            return '15m'
+
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
         base_symbols = [s.replace('-PERP', '') for s in symbols]
@@ -55,32 +73,12 @@ class Backtester:
         data_path.mkdir(parents=True, exist_ok=True)
 
         from glob import glob
-        collector = HistoricalDataCollector(data_dir=str(data_path), days=days_needed)
-        for sym in base_symbols:
-            try:
-                # Look for any existing files for this symbol; if none, collect
-                has_any = False
-                patterns = [
-                    str(data_path / f"perpetual_{sym}_mark_*"),
-                    str(data_path / f"perpetual_{sym}_index_*"),
-                    str(data_path / f"spot_{sym}_*"),
-                ]
-                for p in patterns:
-                    if glob(p):
-                        has_any = True
-                        break
-                if not has_any:
-                    logger.info(f"No local data for {sym}. Collecting 15m futures/spot data (~{days_needed}d)...")
-                    collector.collect_perpetual_mark_ohlcv(sym, timeframe='15m')
-                    collector.collect_perpetual_index_ohlcv(sym, timeframe='15m')
-                    collector.collect_spot_ohlcv(sym, timeframe='15m')
-            except Exception as e:
-                logger.error(f"Failed ensuring data for {sym}: {e}")
+        desired_timeframe = _time_step_to_timeframe(time_step)
 
         # Initialize data manager and load into memory
-        self.oms_client.set_data_manager(HistoricalDataManager(data_dir=self.historical_data_dir))
+        self.oms_client.set_data_manager(HistoricalDataCollector(data_dir=self.historical_data_dir))
         dm = self.oms_client.data_manager
-        dm.load_historical_data(base_symbols)
+        dm.load_historical_data(base_symbols, desired_timeframe, days_needed)
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
@@ -94,12 +92,12 @@ class Backtester:
         if earliest_ts is not None and start_date < earliest_ts:
             aligned_start = earliest_ts
 
-        strategy = strategy_class(symbols=symbols, oms_client=self.oms_client)
-        self.start_time = aligned_start
+        # Snap start to midnight to ensure daily decision ticks are hit
+        self.start_time = aligned_start.replace(hour=0, minute=0, second=0, microsecond=0)
         self.end_time = end_date
-        self.current_time = aligned_start
+        self.current_time = self.start_time
         if time_step is None:
-            time_step = timedelta(hours=1)
+            time_step = timedelta(minutes=15)
         # Run backtest
         iteration = 0
 
@@ -114,9 +112,17 @@ class Backtester:
                 # Revalue portfolio at the current timestamp
                 total_value = self.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
-                summary = self.oms_client.get_position_summary()
                 logger.info(f"Total Portfolio Value: {total_value}")
-                logger.info(f"Position Summary: {summary}")
+                # Pretty-print balances and positions
+                try:
+                    balances_tbl = format_balances_table(self.oms_client.get_account_balance())
+                    positions_tbl = format_positions_table(self.oms_client.get_position())
+                    logger.info("\nBalances:\n" + balances_tbl)
+                    logger.info("\nPositions:\n" + positions_tbl)
+                except Exception as _e:
+                    # Fallback to raw summary on any formatting error
+                    summary = self.oms_client.get_position_summary()
+                    logger.info(f"Position Summary: {summary}")
 
                 strategy.run_strategy()
                 
@@ -177,7 +183,7 @@ class Backtester:
             mean_return = np.mean(self.period_returns)
             std_return = np.std(self.period_returns)
             if std_return > 0:
-                self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24)
+                self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24*4)
 
     def print_results(self, results: Dict[str, Any]):
         """Print backtest results in a formatted way"""

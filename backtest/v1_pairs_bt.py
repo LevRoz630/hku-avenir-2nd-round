@@ -23,47 +23,48 @@ def main():
     # Configure pairs from the request
     pairs_config = [
         {
-            'legs': ['APT', 'NEAR'],
+            'legs': ['APT-USDT', 'NEAR-USDT'],
             'use_futures': True,
             'lookback_days': 7,
-            'entry_z': 0.326,
-            'exit_z': 0.559,
+            'entry_z': 1.5,
+            'exit_z': 0.5,
             'max_alloc_frac': 0.5,
         },
         {
-            'legs': ['OXT', 'ROSE'],
+            'legs': ['OXT-USDT', 'ROSE-USDT'],
             'use_futures': True,
             'lookback_days': 3,
-            'entry_z': 0.333,
-            'exit_z': 0.455,
+            'entry_z': 1.5,
+            'exit_z': 0.5,
             'max_alloc_frac': 0.5,
         },
     ]
 
     set_pairs_config(pairs_config)
 
-    # Build the base symbols list for data loading
+    # Build the base symbols list for data loading (legs already include -USDT)
     base_symbols = []
     for cfg in pairs_config:
         for base in cfg['legs']:
-            sym = f"{base}-USDT"
+            sym = base
             if sym not in base_symbols:
                 base_symbols.append(sym)
 
-    # Historical data directory at repo root
-    hist_dir = Path(__file__).parents[2] / "historical_data"
+    # Historical data directory
+    hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
 
     backtester = Backtester(historical_data_dir=str(hist_dir))
-
-    start_date = datetime.now() - timedelta(days=3)
+    
+    start_date = datetime.now() - timedelta(days=40)
     end_date = datetime.now()
-
+    strategy = PairTradingStrategy(symbols=base_symbols, oms_client=backtester.oms_client, steps=96)
     results = backtester.run_backtest(
-        strategy_class=PairTradingStrategy,
+        strategy=strategy,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(minutes=15),
+
     )
 
     backtester.print_results(results)
