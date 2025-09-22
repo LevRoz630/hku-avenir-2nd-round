@@ -54,8 +54,8 @@ def main():
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
 
     backtester = Backtester(historical_data_dir=str(hist_dir))
-    
-    start_date = datetime.now() - timedelta(days=40)
+
+    start_date = datetime.now() - timedelta(days=3)
     end_date = datetime.now()
     strategy = PairTradingStrategy(symbols=base_symbols, oms_client=backtester.oms_client, steps=96)
     results = backtester.run_backtest(
@@ -64,6 +64,7 @@ def main():
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(minutes=15),
+        market_type="futures",
 
     )
 

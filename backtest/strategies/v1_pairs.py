@@ -20,8 +20,8 @@ class PairTradingStrategy:
         for cfg in _PAIRS_CONFIG:
             base_a, base_b = cfg['legs']
             self.pairs.append({
-                'a_symbol': f"{base_a}-USDT-PERP" if cfg.get('use_futures', True) else f"{base_a}-USDT",
-                'b_symbol': f"{base_b}-USDT-PERP" if cfg.get('use_futures', True) else f"{base_b}-USDT",
+                'a_symbol': f"{base_a}" if cfg.get('use_futures', True) else f"{base_a}",
+                'b_symbol': f"{base_b}" if cfg.get('use_futures', True) else f"{base_b}",
                 'lookback_days': cfg.get('lookback_days', 7),
                 'entry_z': cfg.get('entry_z', 1.5),
                 'exit_z': cfg.get('exit_z', 0.5),

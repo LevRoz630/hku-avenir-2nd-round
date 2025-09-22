@@ -22,7 +22,14 @@ class HistoricalDataCollector:
         """Initialize historical data collector for both spot and perpetual data"""
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
-
+        self.spot_ohlcv_data = {}
+        self.perpetual_mark_ohlcv_data = {}
+        self.perpetual_index_ohlcv_data = {}
+        self.spot_trades_data = {}
+        self.perpetual_trades_data = {}
+        self.funding_rates_data = {}
+        self.open_interest_data = {}
+        
         # Initialize separate exchanges for spot and futures
         self.spot_exchange = binance_sync({
             'sandbox': False,
@@ -61,6 +68,7 @@ class HistoricalDataCollector:
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.spot_ohlcv_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting spot OHLCV for {symbol}...")
@@ -109,9 +117,10 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved spot OHLCV for {symbol}: {len(df):,} records to {filename}")
+            self.spot_ohlcv_data[symbol] = df
             return df
         else:
-            logger.warning(f"  No spot OHLCV data collected for {symbol}")
+            logger.error(f"  No spot OHLCV data collected for {symbol}")
     
     def collect_spot_trades(self, symbol, days=None):
         """Collect spot trades data"""
@@ -121,6 +130,7 @@ class HistoricalDataCollector:
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.spot_trades_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting spot trades for {symbol}...")
@@ -172,19 +182,21 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved spot trades for {symbol}: {len(df):,} records to {filename}")
+            self.spot_trades_data[symbol] = df
             return df
         else:
-            logger.warning(f"  No spot trades data for {symbol}")
+            logger.error(f"  No spot trades data for {symbol}")
     
     def collect_perpetual_mark_ohlcv(self, symbol, timeframe='15m', days=None):
         """Collect perpetual mark price OHLCV data"""
-
+        print(f"DEBUG collect_perp_mark inputs symbol={symbol} timeframe={timeframe} days={days}")
         filename = f"perpetual_{symbol}_mark_{timeframe}_{days}d.parquet"
 
         if Path(self.data_dir / filename).exists():
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.perpetual_mark_ohlcv_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
@@ -192,6 +204,7 @@ class HistoricalDataCollector:
         end_time = datetime.now()
         start_time = end_time - timedelta(days=days)
         ccxt_symbol = self.convert_symbol_to_ccxt(symbol, "future")
+        print(f"DEBUG ccxt_symbol={ccxt_symbol} filename={filename}")
         periods_per_day = self.get_periods_per_day(timeframe)
         total_periods = days * periods_per_day
         max_records_per_request = 1000
@@ -232,9 +245,10 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved perpetual mark OHLCV for {symbol}: {len(df):,} records to {filename}")
+            self.perpetual_mark_ohlcv_data[symbol] = df
             return df
         else:
-            logger.warning(f"  No perpetual mark OHLCV data collected for {symbol}")
+            logger.error(f"  No perpetual mark OHLCV data collected for {symbol}")
     
     def collect_perpetual_index_ohlcv(self, symbol, timeframe='15m', days=None ):
         """Collect perpetual index price OHLCV data"""
@@ -244,6 +258,7 @@ class HistoricalDataCollector:
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.perpetual_index_ohlcv_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
@@ -293,7 +308,10 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved perpetual index OHLCV for {symbol}: {len(df):,} records to {filename}")
+            self.perpetual_index_ohlcv_data[symbol] = df
             return df
+        else:
+            logger.error(f"  No perpetual index OHLCV data collected for {symbol}")
 
     
     def collect_funding_rates(self, symbol, days=None):
@@ -304,6 +322,7 @@ class HistoricalDataCollector:
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.funding_rates_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting funding rates for {symbol}...")
@@ -347,9 +366,11 @@ class HistoricalDataCollector:
                 
                 df.to_parquet(self.data_dir / filename, index=False)
                 logger.info(f"  Saved funding rates for {symbol}: {len(df):,} records to {filename}")
+                self.funding_rates_data[symbol] = df
                 return df
             else:
-                logger.warning(f"  No funding rate data for {symbol}")
+                self.funding_rates_data[symbol] = df
+                logger.error(f"  No funding rate data for {symbol}")
             
             time.sleep(0.5)
             
@@ -364,6 +385,7 @@ class HistoricalDataCollector:
             df = pd.read_parquet(self.data_dir / filename)
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.open_interest_data[symbol] = df
             return df
         else:
             logger.info(f"Collecting open interest for {symbol}...")
@@ -422,9 +444,10 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved open interest for {symbol}: {len(df):,} records to {filename}")
+            self.open_interest_data[symbol] = df
             return df
         else:
-            logger.warning(f"  No open interest data for {symbol}")
+            logger.error(f"  No open interest data for {symbol}")
         
         time.sleep(2)
     
@@ -487,9 +510,10 @@ class HistoricalDataCollector:
             
             df.to_parquet(self.data_dir / filename, index=False)
             logger.info(f"  Saved perpetual trades for {symbol}: {len(df):,} records to {filename}")
+            self.perpetual_trades_data[symbol] = df
             return df
         else:
-            logger.warning(f"  No perpetual trades data for {symbol}")
+            logger.error(f"  No perpetual trades data for {symbol}")
     
     def get_periods_per_day(self, timeframe):
         """Get number of periods per day for a given timeframe"""
@@ -506,66 +530,3 @@ class HistoricalDataCollector:
             '1d': 1
         }
         return periods_per_day_map.get(timeframe, 96)  # Default to 15m if not found
-
-    def load_historical_data(self, symbols, timeframe, days):
-        """Load historical data into memory; if parquet missing use existing collectors to save, then load."""
-        self.spot_ohlcv_data = {}
-        self.perpetual_mark_ohlcv_data = {}
-        self.perpetual_index_ohlcv_data = {}
-
-        for symbol in symbols:
-            # Load spot data if available
-            spot_file = self.data_dir / f"spot_{symbol}_{timeframe}_{days}d.parquet"
-            if not spot_file.exists():
-                try:
-                    self.collect_spot_ohlcv(symbol, timeframe=timeframe, days=days)
-                except Exception as _e:
-                    logger.warning(f"Spot collection failed for {symbol}: {_e}")
-            if spot_file.exists():
-                df = pd.read_parquet(spot_file)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                self.spot_ohlcv_data[symbol] = df
-                logger.info(f"Loaded spot OHLCV for {symbol}: {len(df)} records")
-
-            # Load perpetual mark data
-            mark_file = self.data_dir / f"perpetual_{symbol}_mark_{timeframe}_{days}d.parquet"
-            if not mark_file.exists():
-                try:
-                    self.collect_perpetual_mark_ohlcv(symbol, timeframe=timeframe, days=days)
-                except Exception as _e:
-                    logger.warning(f"Mark collection failed for {symbol}: {_e}")
-            if mark_file.exists():
-                df = pd.read_parquet(mark_file)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                self.perpetual_mark_ohlcv_data[symbol] = df
-                logger.info(f"Loaded perpetual mark OHLCV for {symbol}: {len(df)} records")
-
-            # Load perpetual index data
-            index_file = self.data_dir / f"perpetual_{symbol}_index_{timeframe}_{days}d.parquet"
-            if not index_file.exists():
-                try:
-                    self.collect_perpetual_index_ohlcv(symbol, timeframe=timeframe, days=days)
-                except Exception as _e:
-                    logger.warning(f"Index collection failed for {symbol}: {_e}")
-            if index_file.exists():
-                df = pd.read_parquet(index_file)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                self.perpetual_index_ohlcv_data[symbol] = df
-                logger.info(f"Loaded perpetual index OHLCV for {symbol}: {len(df)} records")
-
-    def get_data_at_time(self, symbol, timestamp, data_type):
-        """Get OHLCV data for a symbol at or before a specific timestamp"""
-        if data_type == 'spot_ohlcv' and symbol in self.spot_ohlcv_data:
-            df = self.spot_ohlcv_data[symbol]
-        elif data_type == 'perpetual_mark_ohlcv' and symbol in self.perpetual_mark_ohlcv_data:
-            df = self.perpetual_mark_ohlcv_data[symbol]
-        elif data_type == 'perpetual_index_ohlcv' and symbol in self.perpetual_index_ohlcv_data:
-            df = self.perpetual_index_ohlcv_data[symbol]
-        else:
-            return pd.DataFrame()
-
-        # Filter data up to the timestamp
-        df = df[df['timestamp'] <= timestamp]
-        if not df.empty:
-            return df.iloc[-1:]  # Return the most recent record
-        return pd.DataFrame()

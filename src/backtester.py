@@ -29,7 +29,8 @@ class Backtester:
                         symbols: List[str],
                         start_date: datetime = None,
                         end_date: datetime = None,
-                        time_step: timedelta = None) -> Dict[str, Any]:
+                        time_step: timedelta = None,
+                        market_type: str = None) -> Dict[str, Any]:
         """
         Execute a strategy over historical data and return performance.
 
@@ -45,7 +46,7 @@ class Backtester:
             start_date: Start datetime (aligned to first data if earlier)
             end_date: End datetime
             time_step: Time delta between backtest iterations
-
+            market_type: Market type to backtest (spot or futures)
         Returns:
             Results dict with PnL series and summary metrics
         """
@@ -78,7 +79,15 @@ class Backtester:
         # Initialize data manager and load into memory
         self.oms_client.set_data_manager(HistoricalDataCollector(data_dir=self.historical_data_dir))
         dm = self.oms_client.data_manager
-        dm.load_historical_data(base_symbols, desired_timeframe, days_needed)
+        for sym in base_symbols:
+            if market_type == "spot":
+                print(f"DEBUG collect_spot_ohlcv sym={sym} tf={desired_timeframe} days={days_needed}")
+                dm.collect_spot_ohlcv(sym, desired_timeframe, days_needed)
+            elif market_type == "futures":
+                print(f"DEBUG collect_perpetual_mark_ohlcv sym={sym} tf={desired_timeframe} days={days_needed}")
+                dm.collect_perpetual_mark_ohlcv(sym, desired_timeframe, days_needed)
+            else:
+                raise ValueError(f"Invalid market type: {market_type}")
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
