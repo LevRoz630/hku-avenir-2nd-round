@@ -12,10 +12,6 @@ logger = logging.getLogger(__name__)
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = historical_data_dir
-        self.current_time = None
-        self.start_time = None
-        self.end_time = None
-        self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
         self.portfolio_values = []
         self.daily_returns = []
         self.max_drawdown = 0
@@ -70,22 +66,18 @@ class Backtester:
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
         base_symbols = [s.replace('-PERP', '') for s in symbols]
-        days_needed = (end_date - start_date).days + 1 if (start_date and end_date) else 90
         data_path.mkdir(parents=True, exist_ok=True)
-
-        from glob import glob
         desired_timeframe = _time_step_to_timeframe(time_step)
 
-        # Initialize data manager and load into memory
-        self.oms_client.set_data_manager(HistoricalDataCollector(data_dir=self.historical_data_dir))
-        dm = self.oms_client.data_manager
+        dm = strategy.oms_client.data_manager
         for sym in base_symbols:
             if market_type == "spot":
-                print(f"DEBUG collect_spot_ohlcv sym={sym} tf={desired_timeframe} days={days_needed}")
-                dm.collect_spot_ohlcv(sym, desired_timeframe, days_needed)
+                print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
+                dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', start_date, end_date)
             elif market_type == "futures":
-                print(f"DEBUG collect_perpetual_mark_ohlcv sym={sym} tf={desired_timeframe} days={days_needed}")
-                dm.collect_perpetual_mark_ohlcv(sym, desired_timeframe, days_needed)
+                print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
+                dm.load_data_period(sym, desired_timeframe, 'mark_ohlcv_futures', start_date, end_date)
+                dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', start_date, end_date)
             else:
                 raise ValueError(f"Invalid market type: {market_type}")
 
@@ -101,52 +93,48 @@ class Backtester:
         if earliest_ts is not None and start_date < earliest_ts:
             aligned_start = earliest_ts
 
-        # Snap start to midnight to ensure daily decision ticks are hit
-        self.start_time = aligned_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.end_time = end_date
-        self.current_time = self.start_time
+        # Define start and end times for the strategy
+        strategy.start_time = aligned_start
+        strategy.end_time = end_date
+
+        # Set the time for data fetching and orders that will be updated as strategy progresses
+        strategy.oms_client.set_current_time(strategy.start_time)
         if time_step is None:
             time_step = timedelta(minutes=15)
         # Run backtest
         iteration = 0
 
-        while self.current_time <= end_date:
+        while strategy.oms_client.current_time <= end_date:
             try:
-                # Update OMS client's current time
-                self.oms_client.set_current_time(self.current_time)
-
-                # Update strategy's current time
-                self.current_time = self.current_time
-                
                 # Revalue portfolio at the current timestamp
-                total_value = self.oms_client.get_total_portfolio_value()
+                total_value = strategy.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
                 try:
-                    balances_tbl = format_balances_table(self.oms_client.get_account_balance())
-                    positions_tbl = format_positions_table(self.oms_client.get_position())
+                    balances_tbl = format_balances_table(strategy.oms_client.get_account_balance())
+                    positions_tbl = format_positions_table(strategy.oms_client.get_position())
                     logger.info("\nBalances:\n" + balances_tbl)
                     logger.info("\nPositions:\n" + positions_tbl)
                 except Exception as _e:
                     # Fallback to raw summary on any formatting error
-                    summary = self.oms_client.get_position_summary()
+                    summary = strategy.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
                 strategy.run_strategy()
                 
                 
                 # Move to next time step
-                self.current_time += time_step
+                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
                 iteration += 1
                 
                 # Log progress every 24 iterations (daily if hourly steps)
                 if iteration % 24 == 0:
-                    logger.info(f"Backtest progress: {self.current_time} (Iteration {iteration})")
+                    logger.info(f"Backtest progress: {strategy.oms_client.current_time} (Iteration {iteration})")
                     
             except Exception as e:
                 logger.error(f"Error in backtest iteration {iteration}: {e}")
-                self.current_time += time_step
+                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
                 continue
         
         # Calculate final performance metrics
@@ -159,9 +147,9 @@ class Backtester:
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
             'max_drawdown': self.max_drawdown,
             'sharpe_ratio': self.sharpe_ratio,
-            'trade_history': self.oms_client.trade_history,
-            'final_balance': self.oms_client.get_account_balance(),
-            'final_positions': self.oms_client.get_position()
+            'trade_history': strategy.oms_client.trade_history,
+            'final_balance': strategy.oms_client.get_account_balance(),
+            'final_positions': strategy.oms_client.get_position()
         }
 
     def calculate_performance_metrics(self):

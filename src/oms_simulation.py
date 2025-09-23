@@ -55,7 +55,7 @@ class BacktesterOMS:
     def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
         """Map trading symbol to data key used by HistoricalDataManager."""
         # Futures files are stored under base symbols; strip the -PERP suffix for lookups
-        if instrument_type in ("future", "mark", "index"):
+        if instrument_type in ("future"):
             return symbol.replace('-PERP', '')
         return symbol
         
@@ -193,12 +193,12 @@ class BacktesterOMS:
         
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
-    def get_current_price(self, symbol: str, instrument_type: str = 'mark') -> Optional[float]:
+    def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
         """Get current price for a symbol
         
         Args:
             symbol: Trading symbol
-            instrument_type: 'mark', 'index', or 'spot', 'future'
+            instrument_type: 'spot', 'future'
         """
         if not self.data_manager or not self.current_time:
             return None
@@ -211,14 +211,10 @@ class BacktesterOMS:
         try:
             # Normalize to data keys (files are stored under base symbols like BTC-USDT)
             base_symbol = self._normalize_symbol(symbol, instrument_type)
-            if instrument_type == 'mark':
-                ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'perpetual_mark_ohlcv')
-            elif instrument_type == 'index':
-                ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'perpetual_index_ohlcv')
-            elif instrument_type == 'spot':
-                ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'spot_ohlcv')
+            if instrument_type == 'spot':
+                ohlcv_data = self.data_manager.collect_live_spot_ohlcv(base_symbol)
             elif instrument_type == 'future':
-                ohlcv_data = self.data_manager.get_data_at_time(base_symbol, self.current_time, 'perpetual_mark_ohlcv')
+                ohlcv_data = self.data_manager.collect_live_futures_ohlcv(base_symbol)
             else:
                 raise ValueError(f"Invalid price type: {instrument_type}")
                 
