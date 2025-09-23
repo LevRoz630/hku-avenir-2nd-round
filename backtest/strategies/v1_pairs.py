@@ -2,7 +2,7 @@ from typing import List, Any, Dict
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from src.oms_simulation import BacktesterOMS
+from oms_simulation import BacktesterOMS
 # Module-level config setter to pass parameters from the runner script
 _PAIRS_CONFIG: List[Dict] = []
 
@@ -12,10 +12,10 @@ def set_pairs_config(pairs_config: List[Dict]):
 
 
 class PairTradingStrategy:
-    def __init__(self, symbols: List[str], historical_data_dir: str, steps: int):
+    def __init__(self, symbols: List[str], historical_data_dir: str, lookback: int):
         self.symbols = symbols
         self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
-        self.steps = steps
+        self.lookback = lookback
         # Build runtime state per pair
         self.pairs = []
         self.historical_data = pd.DataFrame()
@@ -48,37 +48,53 @@ class PairTradingStrategy:
 
         # This conditional should reduce the time we spend collecting data as we only collect full forty days at the start and then check if we need to collect more
         
-        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start=self.start_time, end=self.oms_client.current_time)
-        df = df.iloc[-lookback:]
-        print(f"DEBUG historical_data shift: {df['timestamp'].max()}")
+        # Fetch a rolling window to ensure we have prior days before current day
+        window_days = max(self.lookback + 2, 3)
+        window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
+        start_for_load = max(self.start_time, window_start) if self.start_time is not None else window_start
+        end_for_load = self.oms_client.current_time
+        print(f"DEBUG data_params base={base_symbol} tf=15m start={start_for_load} end={end_for_load}")
+        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=start_for_load, end_date=end_for_load)
         if df is None or df.empty:
+            print(f"DEBUG data_empty base={base_symbol} tf=15m start={self.start_time} end={self.oms_client.current_time}")
             return pd.Series(dtype=float)
         df = df.copy()
         df = df.sort_values('timestamp')
+        print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
         df = df.set_index('timestamp')
         # Resample to daily closes
         daily = df['close'].resample('1D').last().dropna()
+        print(f"DEBUG resampled_daily base={base_symbol} days={len(daily)} idx_range=({daily.index.min()} -> {daily.index.max()})")
+
+        daily = daily.iloc[-self.lookback:]
+        print(f"DEBUG sliced_lookback base={base_symbol} days={len(daily)} idx_range=({daily.index.min()} -> {daily.index.max()})")
         # Align to prior day close relative to current time
-        daily = daily[daily.index.date < self.oms_client.current_time.date()]
+        cutoff = self.oms_client.current_time.normalize()  # midnight of current day
+        daily = daily[daily.index < cutoff]
+        if not daily.empty:
+            print(f"DEBUG filtered_pre_now base={base_symbol} days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}")
         return daily
 
-    def _compute_beta_and_z(self, a_base: str, b_base: str, lookback: int):
+    def _compute_beta_and_z(self, a_base: str, b_base: str):
         """Compute dynamic beta on daily log-prices and z-score like offline.
 
         - Beta from regression of log(y) on log(x) over last `lookback` daily closes (excluding current day)
         - Current spread and historical spreads computed on raw prices using that beta
         - z = (current_spread - mean(historical_spreads)) / std(historical_spreads)
         """
-        a_series = self._get_daily_closes(a_base, lookback)
-        b_series = self._get_daily_closes(b_base, lookback)
+        a_series = self._get_daily_closes(a_base, self.lookback)
+        b_series = self._get_daily_closes(b_base, self.lookback)
         if a_series.empty or b_series.empty:
+            print(f"DEBUG series_empty a_len={len(a_series)} b_len={len(b_series)}")
             return None, None, None
         # Align on common dates
         df = pd.concat([a_series.rename('a'), b_series.rename('b')], axis=1).dropna()
-        if len(df) < lookback + 1:
+        print(f"DEBUG aligned_len={len(df)} a_range=({a_series.index.min()} -> {a_series.index.max()}) b_range=({b_series.index.min()} -> {b_series.index.max()})")
+        if len(df) < self.lookback + 1:
+            print(f"DEBUG insufficient_aligned len={len(df)} needed={self.lookback + 1}")
             return None, None, None
         # Use last (lookback + 1) daily points; last one is "current" bar
-        window = df.iloc[-(lookback + 1):]
+        window = df.iloc[-(self.lookback + 1):]
         hist = window.iloc[:-1]
         curr = window.iloc[-1]
         # Regression on log prices over history window
@@ -101,6 +117,7 @@ class PairTradingStrategy:
     def run_strategy(self):
         # Portfolio value for sizing
         total_equity = float(self.oms_client.get_total_portfolio_value() or 0.0)
+        print(f"DEBUG run start_time={self.start_time} now={self.oms_client.current_time} total_equity={total_equity}")
 
         # Enforce 90% allocation cap across all open pairs
         max_alloc_total = 0.90 * total_equity
@@ -124,8 +141,10 @@ class PairTradingStrategy:
             if not is_decision_time:
                 continue
 
-            beta, z, std = self._compute_beta_and_z(a_base, b_base, p['lookback_days'])
+            print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback}")
+            beta, z, std = self._compute_beta_and_z(a_base, b_base)
             if beta is None:
+                print(f"DEBUG skip_pair reason=no_beta_z pair=({a_base},{b_base})")
                 continue
             p['last_beta'] = beta
 
@@ -139,7 +158,7 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} open={p['is_open']}")
+            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z']) and p['is_open']} open={p['is_open']}")
             if enter:
                 # Enforce one entry per calendar day
                 day_key = (now.year, now.month, now.day)
@@ -161,6 +180,7 @@ class PairTradingStrategy:
 
                     # Check portfolio cap before opening
                     current_deployed = sum(self._alloc_state.values())
+                    print(f"DEBUG alloc_check deployed={current_deployed} add={total_pair_usdt} cap={max_alloc_total}")
                     if current_deployed + total_pair_usdt <= max_alloc_total:
                         if z > 0:
                             if p['current_side'] == 'long_spread':
@@ -184,6 +204,7 @@ class PairTradingStrategy:
                         p['is_open'] = True
                         self._alloc_state[id(p)] = total_pair_usdt
                         self._last_entry_day[id(p)] = day_key
+                        print(f"DEBUG opened side={p['current_side']} a_sym={a_sym} b_sym={b_sym} total_alloc={total_pair_usdt}")
 
             elif exit_ or stop:
                 # Close both legs
@@ -192,6 +213,7 @@ class PairTradingStrategy:
                 p['is_open'] = False
                 p['current_side'] = None
                 self._alloc_state[id(p)] = 0.0
+                print(f"DEBUG closed pair=({a_base},{b_base})")
             else:
                 # Hold
                 continue

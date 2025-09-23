@@ -73,11 +73,11 @@ class Backtester:
         for sym in base_symbols:
             if market_type == "spot":
                 print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
-                dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', start_date, end_date)
+                dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', start_date, end_date, export=True)
             elif market_type == "futures":
                 print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
-                dm.load_data_period(sym, desired_timeframe, 'mark_ohlcv_futures', start_date, end_date)
-                dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', start_date, end_date)
+                dm.load_data_period(sym, desired_timeframe, 'mark_ohlcv_futures', start_date, end_date, export=True)
+                dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', start_date, end_date, export=True)
             else:
                 raise ValueError(f"Invalid market type: {market_type}")
 

@@ -36,14 +36,10 @@ class BacktesterOMS:
         self.trade_history = []  # All trades executed
         self.performance_metrics = {}
         self.current_time = None  # Current backtest time
-        self.data_manager = None  # Will be set by backtester
+        self.data_manager = HistoricalDataCollector(historical_data_dir)  # Will be set by backtester
         # Simple per-timestamp price cache: { (symbol, instrument_type): price }
         self._price_cache_time: Optional[datetime] = None
         self._price_cache: Dict[Tuple[str, str], float] = {}
-
-    def set_data_manager(self, data_manager):
-        """Set the data manager for price fetching"""
-        self.data_manager = data_manager
         
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""

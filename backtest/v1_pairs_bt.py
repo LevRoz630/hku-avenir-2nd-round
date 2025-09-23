@@ -12,9 +12,9 @@ import logging
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from src.backtester import Backtester
+from backtester import Backtester
 from strategies.v1_pairs import PairTradingStrategy, set_pairs_config
-
+# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def main():
     end_date = datetime.now()
 
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), steps=96)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback=2)
     results = backtester.run_backtest(
         strategy=strategy,
         symbols=base_symbols,
