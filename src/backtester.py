@@ -20,7 +20,7 @@ class Backtester:
         self.final_balance = 0
         self.final_positions = []
 
-    def run_backtest(self, 
+    async def run_backtest(self, 
                         strategy: Any,
                         symbols: List[str],
                         start_date: datetime = None,
@@ -107,21 +107,22 @@ class Backtester:
         while strategy.oms_client.current_time <= end_date:
             try:
                 # Revalue portfolio at the current timestamp
-                total_value = strategy.oms_client.get_total_portfolio_value()
+                total_value = await strategy.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
                 try:
                     balances_tbl = format_balances_table(strategy.oms_client.get_account_balance())
-                    positions_tbl = format_positions_table(strategy.oms_client.get_position())
+                    positions_tbl = format_positions_table(await strategy.oms_client.get_position())
                     logger.info("\nBalances:\n" + balances_tbl)
                     logger.info("\nPositions:\n" + positions_tbl)
                 except Exception as _e:
                     # Fallback to raw summary on any formatting error
-                    summary = strategy.oms_client.get_position_summary()
+                    summary = await strategy.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
-                strategy.run_strategy()
+                print()
+                await strategy.run_strategy()
                 
                 
                 # Move to next time step
@@ -141,7 +142,7 @@ class Backtester:
         self.calculate_performance_metrics()
         
         # Return results
-        return {
+        results = {
             'portfolio_values': self.portfolio_values,
             'daily_returns': self.daily_returns,
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
@@ -149,8 +150,15 @@ class Backtester:
             'sharpe_ratio': self.sharpe_ratio,
             'trade_history': strategy.oms_client.trade_history,
             'final_balance': strategy.oms_client.get_account_balance(),
-            'final_positions': strategy.oms_client.get_position()
+            'final_positions': await strategy.oms_client.get_position()
         }
+
+        # Cleanly close live clients
+        try:
+            await strategy.oms_client.data_manager.close()
+        except Exception:
+            pass
+        return results
 
     def calculate_performance_metrics(self):
         """Calculate performance metrics"""

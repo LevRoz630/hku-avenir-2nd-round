@@ -20,7 +20,6 @@ class PairTradingStrategy:
         self.pairs = []
         self.historical_data = pd.DataFrame()
         self.current_time = None
-        self.start_time = None
         self.end_time = None
 
         for cfg in _PAIRS_CONFIG:
@@ -51,28 +50,20 @@ class PairTradingStrategy:
         # Fetch a rolling window to ensure we have prior days before current day
         window_days = max(self.lookback + 2, 3)
         window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
-        start_for_load = max(self.start_time, window_start) if self.start_time is not None else window_start
         end_for_load = self.oms_client.current_time
-        print(f"DEBUG data_params base={base_symbol} tf=15m start={start_for_load} end={end_for_load}")
-        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=start_for_load, end_date=end_for_load)
-        if df is None or df.empty:
-            print(f"DEBUG data_empty base={base_symbol} tf=15m start={self.start_time} end={self.oms_client.current_time}")
-            return pd.Series(dtype=float)
+        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
         df = df.copy()
         df = df.sort_values('timestamp')
         print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
         df = df.set_index('timestamp')
         # Resample to daily closes
         daily = df['close'].resample('1D').last().dropna()
-        print(f"DEBUG resampled_daily base={base_symbol} days={len(daily)} idx_range=({daily.index.min()} -> {daily.index.max()})")
 
         daily = daily.iloc[-self.lookback:]
-        print(f"DEBUG sliced_lookback base={base_symbol} days={len(daily)} idx_range=({daily.index.min()} -> {daily.index.max()})")
-        # Align to prior day close relative to current time
-        cutoff = self.oms_client.current_time.normalize()  # midnight of current day
+        # Don't take the last close as it might leak future info about the current day 
+        cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
-        if not daily.empty:
-            print(f"DEBUG filtered_pre_now base={base_symbol} days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}")
+        print(f"DEBUG filtered_pre_now days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}, shape:{daily.shape}")
         return daily
 
     def _compute_beta_and_z(self, a_base: str, b_base: str):
@@ -82,17 +73,16 @@ class PairTradingStrategy:
         - Current spread and historical spreads computed on raw prices using that beta
         - z = (current_spread - mean(historical_spreads)) / std(historical_spreads)
         """
+
         a_series = self._get_daily_closes(a_base, self.lookback)
         b_series = self._get_daily_closes(b_base, self.lookback)
+        print(f"debug a series shape{a_series.shape} b series shape{b_series.shape}")
         if a_series.empty or b_series.empty:
             print(f"DEBUG series_empty a_len={len(a_series)} b_len={len(b_series)}")
             return None, None, None
         # Align on common dates
         df = pd.concat([a_series.rename('a'), b_series.rename('b')], axis=1).dropna()
         print(f"DEBUG aligned_len={len(df)} a_range=({a_series.index.min()} -> {a_series.index.max()}) b_range=({b_series.index.min()} -> {b_series.index.max()})")
-        if len(df) < self.lookback + 1:
-            print(f"DEBUG insufficient_aligned len={len(df)} needed={self.lookback + 1}")
-            return None, None, None
         # Use last (lookback + 1) daily points; last one is "current" bar
         window = df.iloc[-(self.lookback + 1):]
         hist = window.iloc[:-1]
@@ -114,10 +104,10 @@ class PairTradingStrategy:
         return beta, float(z), spread_std
 
 
-    def run_strategy(self):
+    async def run_strategy(self):
         # Portfolio value for sizing
-        total_equity = float(self.oms_client.get_total_portfolio_value() or 0.0)
-        print(f"DEBUG run start_time={self.start_time} now={self.oms_client.current_time} total_equity={total_equity}")
+        total_equity = float(await self.oms_client.get_total_portfolio_value() or 0.0)
+        print(f"DEBUG run now={self.oms_client.current_time} total_equity={total_equity}")
 
         # Enforce 90% allocation cap across all open pairs
         max_alloc_total = 0.90 * total_equity
@@ -131,15 +121,10 @@ class PairTradingStrategy:
 
         # Only make entry/exit decisions once per day using daily signals
         now = self.oms_client.current_time
-        is_decision_time = True
 
         for p in self.pairs:
             a_base = p['a_symbol'].replace('-PERP', '')
             b_base = p['b_symbol'].replace('-PERP', '')
-
-            # Compute daily beta/z only at decision time; otherwise hold
-            if not is_decision_time:
-                continue
 
             print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback}")
             beta, z, std = self._compute_beta_and_z(a_base, b_base)
@@ -184,21 +169,21 @@ class PairTradingStrategy:
                     if current_deployed + total_pair_usdt <= max_alloc_total:
                         if z > 0:
                             if p['current_side'] == 'long_spread':
-                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
 
                             # Short A, Long B * beta
-                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'SHORT')
-                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'LONG')
+                            await self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'SHORT')
+                            await self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'LONG')
                             p['current_side'] = 'short_spread'
                         else:
                             if p['current_side'] == 'short_spread':
-                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
                             
                             # Long A, Short B * beta
-                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'LONG')
-                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'SHORT')
+                            await self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'LONG')
+                            await self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'SHORT')
                             p['current_side'] = 'long_spread'
 
                         p['is_open'] = True
@@ -208,8 +193,8 @@ class PairTradingStrategy:
 
             elif exit_ or stop:
                 # Close both legs
-                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
                 p['is_open'] = False
                 p['current_side'] = None
                 self._alloc_state[id(p)] = 0.0

@@ -39,6 +39,8 @@ from pathlib import Path
 import logging
 from ccxt import binance as binance_sync
 from ccxt.pro import binance as binance_pro
+import re
+from typing import Optional, Dict, Tuple
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -96,7 +98,7 @@ class HistoricalDataCollector:
             Directory path for storing collected data files. Default is "../hku-data/test_data".
         """
         self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # Data storage dictionaries
         self.spot_ohlcv_data = {}
@@ -132,6 +134,29 @@ class HistoricalDataCollector:
             'enableRateLimit': True,
             'options': {'defaultType': 'future'}
         })
+
+    async def close(self):
+        """Close underlying exchange clients (websocket and REST)."""
+        try:
+            if hasattr(self, 'live_futures_exchange') and self.live_futures_exchange is not None:
+                await self.live_futures_exchange.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'live_spot_exchange') and self.live_spot_exchange is not None:
+                await self.live_spot_exchange.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'spot_exchange') and self.spot_exchange is not None and hasattr(self.spot_exchange, 'close'):
+                self.spot_exchange.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'futures_exchange') and self.futures_exchange is not None and hasattr(self.futures_exchange, 'close'):
+                self.futures_exchange.close()
+        except Exception:
+            pass
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
                         start_date: datetime, end_date: datetime, export: bool = False):
@@ -202,18 +227,15 @@ class HistoricalDataCollector:
             raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
         
         # Route to appropriate collection method based on data type
-        if data_type == "ohlcv_futures":
+        if data_type == "mark_ohlcv_futures":
             self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
             filtered_data = self.perpetual_mark_ohlcv_data[symbol]
-        elif data_type == "ohlcv_spot":
-            self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
-            filtered_data = self.spot_ohlcv_data[symbol]
         elif data_type == "index_ohlcv_futures":
             self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
             filtered_data = self.perpetual_index_ohlcv_data[symbol]
-        elif data_type == "mark_ohlcv_futures":
-            self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
-            filtered_data = self.perpetual_mark_ohlcv_data[symbol]
+        elif data_type == "ohlcv_spot":
+            self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
+            filtered_data = self.spot_ohlcv_data[symbol]
         elif data_type == "funding_rates":
             self.collect_funding_rates(symbol, start_date, export=export)
             filtered_data = self.funding_rates_data[symbol]
@@ -230,6 +252,7 @@ class HistoricalDataCollector:
         filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & 
                                     (filtered_data["timestamp"] <= end_date)]
         return filtered_data
+
 
     def collect_spot_ohlcv(self, symbol: str, timeframe: str = '15m', 
                           start_time: datetime = None, export: bool = False):
@@ -274,12 +297,15 @@ class HistoricalDataCollector:
         end_time = datetime.now()
         if start_time is None:
             raise ValueError("Start time is required")
-
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
+
+
+        
         filename = f"spot_{symbol.replace('-', '_')}_ohlcv_{timeframe}_{start_str}_{end_str}.parquet"
 
+        
         # Check if data already exists
         if Path(self.data_dir / filename).exists() and not export:
             df = pd.read_parquet(self.data_dir / filename)
@@ -459,7 +485,6 @@ class HistoricalDataCollector:
         end_time = datetime.now()
         if start_time is None:
             raise ValueError("Start time is required")
-
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
@@ -813,6 +838,32 @@ class HistoricalDataCollector:
             return df
         else:
             logger.error(f"  No perpetual trades data for {symbol}")
+            return None
+
+
+
+    async def collect_live_futures_ohlcv(self, symbol: str):
+        symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        try:
+            data = await self.live_futures_exchange.watch_ohlcv(symbol)
+            rows = data if (data and isinstance(data[0], (list, tuple))) else [data]
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df
+        except Exception as e:
+            logger.error(f"Failed to collect live futures OHLCV data for {symbol}: {e}")
+            return None
+
+    async def collect_live_spot_ohlcv(self, symbol: str):
+        symbol = self._convert_symbol_to_ccxt(symbol, "spot")
+        try:
+            data = await self.live_spot_exchange.watch_ohlcv(symbol)
+            rows = data if (data and isinstance(data[0], (list, tuple))) else [data]
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df
+        except Exception as e:
+            logger.error(f"Failed to collect live spot OHLCV data for {symbol}: {e}")
             return None
 
     # Helper methods with documentation

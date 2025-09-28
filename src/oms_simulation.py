@@ -51,7 +51,7 @@ class BacktesterOMS:
     def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
         """Map trading symbol to data key used by HistoricalDataManager."""
         # Futures files are stored under base symbols; strip the -PERP suffix for lookups
-        if instrument_type in ("future"):
+        if instrument_type == "future":
             return symbol.replace('-PERP', '')
         return symbol
         
@@ -63,7 +63,7 @@ class BacktesterOMS:
         """Get account balance as dictionary - compatible with strategy interface"""
         return {asset: float(balance) for asset, balance in self.balance.items()}
     
-    def get_position(self) -> List[Dict[str, Any]]:
+    async def get_position(self) -> List[Dict[str, Any]]:
         """Return current non-zero positions with live valuation and PnL."""
         positions = []
         for symbol, pos in self.positions.items():
@@ -71,7 +71,7 @@ class BacktesterOMS:
 
             if abs(pos['quantity']) > 0:
                 # Calculate current value and PnL
-                current_price = self.get_current_price(symbol, instrument_type)
+                current_price = await self.get_current_price(symbol, instrument_type)
                 if current_price:
                     current_value = abs(pos['quantity']) * current_price
                     pnl = pos['quantity'] * (current_price - pos['entry_price'])
@@ -88,15 +88,15 @@ class BacktesterOMS:
                     })
         return positions
     
-    def set_target_position(self, symbol: str, instrument_type: str, 
+    async def set_target_position(self, symbol: str, instrument_type: str, 
                           target_value: float, position_side: str) -> Dict[str, Any]:
         """Place/adjust a position using target USDT value; supports CLOSE to exit."""
         try:
 
             if instrument_type == "future":
-                return self._set_position(symbol, target_value, position_side, instrument_type)
+                return await self._set_position(symbol, target_value, position_side, instrument_type)
             elif instrument_type == "spot":
-                return self._set_position(symbol, target_value, position_side, instrument_type)
+                return await self._set_position(symbol, target_value, position_side, instrument_type)
             else:
                 raise ValueError(f"Unsupported instrument type: {instrument_type}")
                 
@@ -104,9 +104,9 @@ class BacktesterOMS:
             logger.error(f"Error setting target position: {e}")
             return {"id": f"error_{len(self.trade_history)}", "status": "error", "message": str(e)}
  
-    def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
+    async def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
         """Set position using USDT amount; converts to quantity at current price"""
-        current_price = self.get_current_price(symbol, instrument_type)
+        current_price = await self.get_current_price(symbol, instrument_type)
         if not current_price:
             raise ValueError(f"Unable to get current price for {symbol}")
 
@@ -136,7 +136,7 @@ class BacktesterOMS:
         # Handle explicit close before side comparisons to avoid misrouting CLOSE
         if position_side == 'CLOSE':
             # Explicit close: realize PnL and zero out the position
-            pnl = self.pnl_close_position(symbol, instrument_type)
+            pnl = await self.pnl_close_position(symbol, instrument_type)
             self.balance['USDT'] += (pnl or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
@@ -162,7 +162,7 @@ class BacktesterOMS:
 
         elif position_side != current_side:
             # Flip side: realize PnL on the old side, then open a fresh position
-            pnl = self.pnl_close_position(symbol, instrument_type)
+            pnl = await self.pnl_close_position(symbol, instrument_type)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.balance['USDT'] += (pnl or 0.0)
             if not is_futures:
@@ -189,7 +189,7 @@ class BacktesterOMS:
         
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
-    def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
+    async def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
         """Get current price for a symbol
         
         Args:
@@ -208,9 +208,9 @@ class BacktesterOMS:
             # Normalize to data keys (files are stored under base symbols like BTC-USDT)
             base_symbol = self._normalize_symbol(symbol, instrument_type)
             if instrument_type == 'spot':
-                ohlcv_data = self.data_manager.collect_live_spot_ohlcv(base_symbol)
+                ohlcv_data =  await self.data_manager.collect_live_spot_ohlcv(base_symbol)
             elif instrument_type == 'future':
-                ohlcv_data = self.data_manager.collect_live_futures_ohlcv(base_symbol)
+                ohlcv_data = await self.data_manager.collect_live_futures_ohlcv(base_symbol)
             else:
                 raise ValueError(f"Invalid price type: {instrument_type}")
                 
@@ -223,9 +223,9 @@ class BacktesterOMS:
         
         return None
     
-    def pnl_close_position(self, symbol: str, instrument_type: str):
+    async def pnl_close_position(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""
-        current_price = self.get_current_price(symbol, instrument_type)
+        current_price = await self.get_current_price(symbol, instrument_type)
         pos = self.positions[symbol]
         pnl = 0.0
         if current_price and pos['quantity'] != 0:
@@ -236,7 +236,7 @@ class BacktesterOMS:
             pos['value'] = abs(pos['quantity']) * current_price
         return pnl
 
-    def get_total_portfolio_value(self) -> float:
+    async def get_total_portfolio_value(self) -> float:
         """Get total portfolio value including balances and appropriate position valuation.
 
         - Spot: add current notional value of holdings
@@ -246,7 +246,7 @@ class BacktesterOMS:
 
         for symbol, pos in self.positions.items():
             instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
-            current_price = self.get_current_price(symbol, instrument_type)
+            current_price = await self.get_current_price(symbol, instrument_type)
             if not current_price:
                 continue
             quantity = float(pos.get('quantity', 0.0))
@@ -271,19 +271,19 @@ class BacktesterOMS:
                 total_value += pos['value']
         return total_value
 
-    def get_position_summary(self) -> Dict[str, Any]:
+    async def get_position_summary(self) -> Dict[str, Any]:
         """Get a summary of all positions and balances"""
         summary = {
             'balances': self.balance.copy(),
             'positions': {},
-            'total_portfolio_value': self.get_total_portfolio_value(),
+            'total_portfolio_value': await self.get_total_portfolio_value(),
             'total_trades': len(self.trade_history)
         }
         
         for symbol, pos in self.positions.items():
             if abs(pos['quantity']) > 0:
                 instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
-                current_price = self.get_current_price(symbol, instrument_type)
+                current_price = await self.get_current_price(symbol, instrument_type)
                 if current_price:
                     qty = float(pos['quantity'])
                     entry = float(pos['entry_price'])

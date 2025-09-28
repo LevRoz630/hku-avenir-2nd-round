@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 import logging
+import asyncio
 
 # Add current dir (for local strategies) and src (engine)
 sys.path.append(str(Path(__file__).parent))
@@ -19,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def main():
+async def main():
     # Configure pairs from the request
     pairs_config = [
         {
@@ -52,17 +53,17 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now() - timedelta(days=12)
+    start_date = datetime.now() - timedelta(days=30)
     end_date = datetime.now()
 
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback=2)
-    results = backtester.run_backtest(
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback=10)
+    results = await backtester.run_backtest(
         strategy=strategy,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(minutes=15),
+        time_step=timedelta(minutes = 1440),
         market_type="futures",
 
     )
@@ -70,6 +71,6 @@ def main():
     backtester.print_results(results)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
 

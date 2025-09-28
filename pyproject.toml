@@ -3,6 +3,9 @@ name = "data-work-59q897"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+authors = [
+    {name = "Lev", email = "lr264@st-andrews.ac.uk"}
+]
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.12.15",

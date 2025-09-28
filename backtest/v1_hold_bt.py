@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 import logging
+import asyncio
 
 # Add current directory to path (for local strategies package)
 sys.path.append(str(Path(__file__).parent))
@@ -24,7 +25,7 @@ from src.hist_data import HistoricalDataCollector
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def main():
+async def main():
     """Main function to run complete backtest analysis"""
     print("Crypto Trading Strategy Backtester")
     print("=" * 50)
@@ -39,13 +40,13 @@ def main():
     
     # 4. Run backtest and change strategies and start date/end date and timestep
 
-    results = backtester.run_backtest(strategy_class=HoldStrategy, 
+    results = await backtester.run_backtest(strategy_class=HoldStrategy, 
     symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
     start_date=datetime.now() - timedelta(days = 1), 
     end_date=datetime.now(), time_step=timedelta(hours=1))
 
     
-    backtester.print_results(results)
+    await backtester.print_results(results)
 
     # # Analyze trades
     # analyze_trades(results, "Hold Strategy")
@@ -61,4 +62,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
