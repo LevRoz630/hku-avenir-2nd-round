@@ -52,7 +52,7 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now() - timedelta(days=180)
+    start_date = datetime.now() - timedelta(days=30)
     end_date = datetime.now()
 
     backtester = Backtester()
@@ -62,7 +62,7 @@ def main():
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(minutes = 1440),
+        time_step=timedelta(minutes = 15),
         market_type="futures"
 
     )

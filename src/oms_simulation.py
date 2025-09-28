@@ -40,13 +40,17 @@ class BacktesterOMS:
         # Simple per-timestamp price cache: { (symbol, instrument_type): price }
         self._price_cache_time: Optional[datetime] = None
         self._price_cache: Dict[Tuple[str, str], float] = {}
-        
+        self.timestep = None
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
         # Invalidate per-timestep price cache whenever the clock advances
         self._price_cache_time = current_time
         self._price_cache.clear()
+
+    def set_timestep(self, timestep: timedelta):
+        """Set timestep"""
+        self.timestep = timestep
 
     def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
         """Map trading symbol to data key used by HistoricalDataManager."""
@@ -209,11 +213,14 @@ class BacktesterOMS:
             if not pd.api.types.is_datetime64_any_dtype(ts):
                 df = df.copy()
                 df['timestamp'] = pd.to_datetime(ts, errors='coerce')
-            df_now = df[df['timestamp'] <= self.current_time]
+            # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
+            df_now = df[df['timestamp'] <= (self.current_time + self.timestep)]
             print(f"DEBUG df_now = {len(df_now)}")
             if df_now.empty:
                 return None
             price = float(df_now['close'].iloc[-1])
+            print(f"DEBUG timestamp = {df_now['timestamp'].iloc[-1]}")
+            print(f"DEBUG current_time = {self.current_time + self.timestep}")
             print(f"DEBUG price = {price}")
             return price
         except Exception as e:

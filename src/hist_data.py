@@ -307,6 +307,18 @@ class HistoricalDataCollector:
             except Exception:
                 logger.info(f"Cache hit: {data_type} {symbol} {timeframe}, rows={len(cached):,}")
             # Populate in-memory store so downstream readers (e.g., OMS) can source prices
+            if data_type == 'ohlcv_spot':
+                self.spot_ohlcv_data[symbol] = cached
+            elif data_type == 'mark_ohlcv_futures':
+                self.perpetual_mark_ohlcv_data[symbol] = cached
+            elif data_type == 'index_ohlcv_futures':
+                self.perpetual_index_ohlcv_data[symbol] = cached
+            elif data_type == 'funding_rates':
+                self.funding_rates_data[symbol] = cached
+            elif data_type == 'open_interest':
+                self.open_interest_data[symbol] = cached
+            elif data_type == 'trades_futures':
+                self.perpetual_trades_data[symbol] = cached
             filtered_data = cached
 
         else:

@@ -72,6 +72,8 @@ class Backtester:
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
         dm = strategy.oms_client.data_manager
+        
+
         for sym in base_symbols:
             if market_type == "spot":
                 print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
@@ -101,8 +103,11 @@ class Backtester:
 
         # Set the time for data fetching and orders that will be updated as strategy progresses
         strategy.oms_client.set_current_time(strategy.start_time)
+        
         if time_step is None:
             time_step = timedelta(minutes=15)
+        strategy.oms_client.set_timestep(time_step)
+        
         # Run backtest
         iteration = 0
 
