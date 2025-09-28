@@ -158,6 +158,65 @@ class HistoricalDataCollector:
         except Exception:
             pass
 
+    # ------------------------
+    # Cache utilities
+    # ------------------------
+    def _cache_glob(self, kind: str, symbol: str, timeframe: str | None) -> list:
+        key = symbol.replace('-', '_')
+        patterns = {
+            'ohlcv_spot':           f"spot_{key}_ohlcv_{timeframe}_*.parquet",
+            'mark_ohlcv_futures':   f"perpetual_{key}_mark_{timeframe}_*.parquet",
+            'index_ohlcv_futures':  f"perpetual_{key}_index_{timeframe}_*.parquet",
+            'funding_rates':        f"perpetual_{key}_funding_rates_*.parquet",
+            'open_interest':        f"perpetual_{key}_open_interest_{timeframe}_*.parquet",
+            'trades_futures':       f"perpetual_{key}_trades_*.parquet",
+        }
+        pattern = patterns[kind]
+        return sorted(self.data_dir.glob(pattern))
+
+    def load_cached_window(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
+        """Return cached parquet data sliced to [start_date, end_date] if available, else None."""
+        files = self._cache_glob(kind, symbol, timeframe)
+        if not files:
+            return None
+        s, e = pd.Timestamp(start_date), pd.Timestamp(end_date)
+        frames = []
+        for fp in files:
+            try:
+                df = pd.read_parquet(fp)
+                if 'timestamp' not in df.columns:
+                    continue
+                # Normalize timestamp dtype robustly (supports datetime, ms, s)
+                ts = df['timestamp']
+                if not pd.api.types.is_datetime64_any_dtype(ts):
+                    try:
+                        if pd.api.types.is_integer_dtype(ts):
+                            vmax = int(pd.Series(ts).dropna().astype('int64').abs().max()) if len(ts) else 0
+                            # Heuristics: 13-digit ~ ms, 10-digit ~ seconds
+                            unit = 'ms' if vmax >= 10_000_000_000 else 's'
+                            df['timestamp'] = pd.to_datetime(ts, unit=unit, errors='coerce')
+                        else:
+                            df['timestamp'] = pd.to_datetime(ts, errors='coerce')
+                    except Exception:
+                        df['timestamp'] = pd.to_datetime(ts, errors='coerce')
+                ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
+                if ts_max < s or ts_min > e:
+                    continue
+                sliced = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
+                if sliced.empty:
+                    continue
+                frames.append(sliced)
+            except Exception:
+                continue
+        if not frames:
+            return None
+        out = pd.concat(frames, ignore_index=True)
+
+        if out.empty:
+            return None
+            
+        return out.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
                         start_date: datetime, end_date: datetime, export: bool = False):
         """
@@ -226,31 +285,43 @@ class HistoricalDataCollector:
         if data_type not in data_types:
             raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
         
-        # Route to appropriate collection method based on data type
-        if data_type == "mark_ohlcv_futures":
-            self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
-            filtered_data = self.perpetual_mark_ohlcv_data[symbol]
-        elif data_type == "index_ohlcv_futures":
-            self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
-            filtered_data = self.perpetual_index_ohlcv_data[symbol]
-        elif data_type == "ohlcv_spot":
-            self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
-            filtered_data = self.spot_ohlcv_data[symbol]
-        elif data_type == "funding_rates":
-            self.collect_funding_rates(symbol, start_date, export=export)
-            filtered_data = self.funding_rates_data[symbol]
-        elif data_type == "open_interest":
-            self.collect_open_interest(symbol, timeframe, start_date, export=export)
-            filtered_data = self.open_interest_data[symbol]
-        elif data_type == "trades_futures":
-            self.collect_perpetual_trades(symbol, start_date, export=export)
-            filtered_data = self.perpetual_trades_data[symbol]
+        # Cache-first, then collect
+        kind_map = {
+            'ohlcv_spot': 'ohlcv_spot',
+            'mark_ohlcv_futures': 'mark_ohlcv_futures',
+            'index_ohlcv_futures': 'index_ohlcv_futures',
+            'funding_rates': 'funding_rates',
+            'open_interest': 'open_interest',
+            'trades_futures': 'trades_futures',
+        }
+        cached = self.load_cached_window(kind_map[data_type], symbol, start_date, end_date, timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None)
+        if cached is not None and not cached.empty:
+            filtered_data = cached
+
         else:
-            raise ValueError(f"Invalid data type: {data_type}")
+            if data_type == "mark_ohlcv_futures":
+                self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
+                filtered_data = self.perpetual_mark_ohlcv_data.get(symbol)
+            elif data_type == "index_ohlcv_futures":
+                self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
+                filtered_data = self.perpetual_index_ohlcv_data.get(symbol)
+            elif data_type == "ohlcv_spot":
+                self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
+                filtered_data = self.spot_ohlcv_data.get(symbol)
+            elif data_type == "funding_rates":
+                self.collect_funding_rates(symbol, start_date, export=export)
+                filtered_data = self.funding_rates_data.get(symbol)
+            elif data_type == "open_interest":
+                self.collect_open_interest(symbol, timeframe, start_date, export=export)
+                filtered_data = self.open_interest_data.get(symbol)
+            elif data_type == "trades_futures":
+                self.collect_perpetual_trades(symbol, start_date, export=export)
+                filtered_data = self.perpetual_trades_data.get(symbol)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
 
         # Filter data to the requested time period
-        filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & 
-                                    (filtered_data["timestamp"] <= end_date)]
+        filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
         return filtered_data
 
 
@@ -305,16 +376,7 @@ class HistoricalDataCollector:
         
         filename = f"spot_{symbol.replace('-', '_')}_ohlcv_{timeframe}_{start_str}_{end_str}.parquet"
 
-        
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.spot_ohlcv_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting spot OHLCV for {symbol}...")
+        logger.info(f"Collecting spot OHLCV for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "spot")
 
@@ -394,19 +456,10 @@ class HistoricalDataCollector:
             raise ValueError("Start time is required")
 
         # Generate safe filename
-        start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
-        end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
+        start_str = start_time.strftime('%Y%m%d') if isinstance(start_time, datetime) else str(start_time)
+        end_str = end_time.strftime('%Y%m%d') if isinstance(end_time, datetime) else str(end_time)
         filename = f"perpetual_{symbol.replace('-', '_')}_mark_{timeframe}_{start_str}_{end_str}.parquet"
-
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.perpetual_mark_ohlcv_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
+        logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
 
@@ -490,15 +543,7 @@ class HistoricalDataCollector:
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
         filename = f"perpetual_{symbol.replace('-', '_')}_index_{timeframe}_{start_str}_{end_str}.parquet"
 
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.perpetual_index_ohlcv_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
+        logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
 
@@ -576,15 +621,7 @@ class HistoricalDataCollector:
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
         filename = f"perpetual_{symbol.replace('-', '_')}_funding_rates_{start_str}_{end_str}.parquet"
 
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.funding_rates_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting funding rates for {symbol}...")
+        logger.info(f"Collecting funding rates for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
         since = int(start_time.timestamp() * 1000)
@@ -685,15 +722,7 @@ class HistoricalDataCollector:
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
         filename = f"perpetual_{symbol.replace('-', '_')}_open_interest_{timeframe}_{start_str}_{end_str}.parquet"
 
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.open_interest_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting open interest for {symbol}...")
+        logger.info(f"Collecting open interest for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
 
@@ -779,15 +808,8 @@ class HistoricalDataCollector:
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
         filename = f"perpetual_{symbol.replace('-', '_')}_trades_{start_str}_{end_str}.parquet"
 
-        # Check if data already exists
-        if Path(self.data_dir / filename).exists() and not export:
-            df = pd.read_parquet(self.data_dir / filename)
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.perpetual_trades_data[symbol] = df
-            return df
-        else:
-            logger.info(f"Collecting perpetual trades for {symbol}...")
+
+        logger.info(f"Collecting perpetual trades for {symbol}...")
 
         ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
         all_trades = []

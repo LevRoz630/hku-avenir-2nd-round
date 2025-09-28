@@ -12,10 +12,10 @@ def set_pairs_config(pairs_config: List[Dict]):
 
 
 class PairTradingStrategy:
-    def __init__(self, symbols: List[str], historical_data_dir: str, lookback: int):
+    def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int):
         self.symbols = symbols
         self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
-        self.lookback = lookback
+        self.lookback_days = lookback_days 
         # Build runtime state per pair
         self.pairs = []
         self.historical_data = pd.DataFrame()
@@ -37,7 +37,7 @@ class PairTradingStrategy:
                 'last_beta': 1.0,
             })
 
-    def _get_daily_closes(self, base_symbol: str, lookback: int) -> pd.Series:
+    def _get_daily_closes(self, base_symbol: str) -> pd.Series:
         """Return daily close series up to current time using mark OHLCV.
 
         Falls back to resampling 15m/1h data to daily closes if 1d is not present.
@@ -48,7 +48,7 @@ class PairTradingStrategy:
         # This conditional should reduce the time we spend collecting data as we only collect full forty days at the start and then check if we need to collect more
         
         # Fetch a rolling window to ensure we have prior days before current day
-        window_days = max(self.lookback + 2, 3)
+        window_days = max(self.lookback_days + 2, 3)
         window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
         end_for_load = self.oms_client.current_time
         df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
@@ -59,7 +59,7 @@ class PairTradingStrategy:
         # Resample to daily closes
         daily = df['close'].resample('1D').last().dropna()
 
-        daily = daily.iloc[-self.lookback:]
+        daily = daily.iloc[-self.lookback_days:]
         # Don't take the last close as it might leak future info about the current day 
         cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
@@ -69,13 +69,13 @@ class PairTradingStrategy:
     def _compute_beta_and_z(self, a_base: str, b_base: str):
         """Compute dynamic beta on daily log-prices and z-score like offline.
 
-        - Beta from regression of log(y) on log(x) over last `lookback` daily closes (excluding current day)
+        - Beta from regression of log(y) on log(x) over last `lookback_days` daily closes (excluding current day)
         - Current spread and historical spreads computed on raw prices using that beta
         - z = (current_spread - mean(historical_spreads)) / std(historical_spreads)
         """
 
-        a_series = self._get_daily_closes(a_base, self.lookback)
-        b_series = self._get_daily_closes(b_base, self.lookback)
+        a_series = self._get_daily_closes(a_base)
+        b_series = self._get_daily_closes(b_base)
         print(f"debug a series shape{a_series.shape} b series shape{b_series.shape}")
         if a_series.empty or b_series.empty:
             print(f"DEBUG series_empty a_len={len(a_series)} b_len={len(b_series)}")
@@ -84,7 +84,7 @@ class PairTradingStrategy:
         df = pd.concat([a_series.rename('a'), b_series.rename('b')], axis=1).dropna()
         print(f"DEBUG aligned_len={len(df)} a_range=({a_series.index.min()} -> {a_series.index.max()}) b_range=({b_series.index.min()} -> {b_series.index.max()})")
         # Use last (lookback + 1) daily points; last one is "current" bar
-        window = df.iloc[-(self.lookback + 1):]
+        window = df.iloc[-(self.lookback_days + 1):]
         hist = window.iloc[:-1]
         curr = window.iloc[-1]
         # Regression on log prices over history window
@@ -126,7 +126,7 @@ class PairTradingStrategy:
             a_base = p['a_symbol'].replace('-PERP', '')
             b_base = p['b_symbol'].replace('-PERP', '')
 
-            print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback}")
+            print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback_days}")
             beta, z, std = self._compute_beta_and_z(a_base, b_base)
             if beta is None:
                 print(f"DEBUG skip_pair reason=no_beta_z pair=({a_base},{b_base})")

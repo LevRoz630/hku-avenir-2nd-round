@@ -57,14 +57,14 @@ async def main():
     end_date = datetime.now()
 
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback=10)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=10)
     results = await backtester.run_backtest(
         strategy=strategy,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(minutes = 1440),
-        market_type="futures",
+        market_type="futures"
 
     )
 
