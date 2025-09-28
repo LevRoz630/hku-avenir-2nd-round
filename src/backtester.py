@@ -20,7 +20,7 @@ class Backtester:
         self.final_balance = 0
         self.final_positions = []
 
-    async def run_backtest(self, 
+    def run_backtest(self, 
                         strategy: Any,
                         symbols: List[str],
                         start_date: datetime = None,
@@ -109,22 +109,20 @@ class Backtester:
         while strategy.oms_client.current_time <= end_date:
             try:
                 # Revalue portfolio at the current timestamp
-                total_value = await strategy.oms_client.get_total_portfolio_value()
+                total_value = strategy.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
                 try:
-                    balances_tbl = format_balances_table(strategy.oms_client.get_account_balance())
-                    positions_tbl = format_positions_table(await strategy.oms_client.get_position())
-                    logger.info("\nBalances:\n" + balances_tbl)
+                    positions_tbl = format_positions_table(strategy.oms_client.get_position())
                     logger.info("\nPositions:\n" + positions_tbl)
                 except Exception as _e:
                     # Fallback to raw summary on any formatting error
-                    summary = await strategy.oms_client.get_position_summary()
+                    summary = strategy.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
                 print()
-                await strategy.run_strategy()
+                strategy.run_strategy()
                 
                 
                 # Move to next time step
@@ -152,12 +150,12 @@ class Backtester:
             'sharpe_ratio': self.sharpe_ratio,
             'trade_history': strategy.oms_client.trade_history,
             'final_balance': strategy.oms_client.get_account_balance(),
-            'final_positions': await strategy.oms_client.get_position()
+            'final_positions': strategy.oms_client.get_position()
         }
 
         # Cleanly close live clients
         try:
-            await strategy.oms_client.data_manager.close()
+            strategy.oms_client.data_manager.close()
         except Exception:
             pass
         return results

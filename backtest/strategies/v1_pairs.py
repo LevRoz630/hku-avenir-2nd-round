@@ -104,9 +104,9 @@ class PairTradingStrategy:
         return beta, float(z), spread_std
 
 
-    async def run_strategy(self):
+    def run_strategy(self):
         # Portfolio value for sizing
-        total_equity = float(await self.oms_client.get_total_portfolio_value() or 0.0)
+        total_equity = float(self.oms_client.get_total_portfolio_value() or 0.0)
         print(f"DEBUG run now={self.oms_client.current_time} total_equity={total_equity}")
 
         # Enforce 90% allocation cap across all open pairs
@@ -143,7 +143,7 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z']) and p['is_open']} open={p['is_open']}")
+            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
             if enter:
                 # Enforce one entry per calendar day
                 day_key = (now.year, now.month, now.day)
@@ -169,21 +169,21 @@ class PairTradingStrategy:
                     if current_deployed + total_pair_usdt <= max_alloc_total:
                         if z > 0:
                             if p['current_side'] == 'long_spread':
-                                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
 
                             # Short A, Long B * beta
-                            await self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'SHORT')
-                            await self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'LONG')
+                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'SHORT')
+                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'LONG')
                             p['current_side'] = 'short_spread'
                         else:
                             if p['current_side'] == 'short_spread':
-                                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
                             
                             # Long A, Short B * beta
-                            await self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'LONG')
-                            await self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'SHORT')
+                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'LONG')
+                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'SHORT')
                             p['current_side'] = 'long_spread'
 
                         p['is_open'] = True
@@ -193,8 +193,8 @@ class PairTradingStrategy:
 
             elif exit_ or stop:
                 # Close both legs
-                await self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                await self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
+                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
                 p['is_open'] = False
                 p['current_side'] = None
                 self._alloc_state[id(p)] = 0.0

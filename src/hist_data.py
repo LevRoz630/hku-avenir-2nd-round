@@ -294,11 +294,26 @@ class HistoricalDataCollector:
             'open_interest': 'open_interest',
             'trades_futures': 'trades_futures',
         }
-        cached = self.load_cached_window(kind_map[data_type], symbol, start_date, end_date, timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None)
+        cached = self.load_cached_window(
+            kind_map[data_type], symbol, start_date, end_date,
+            timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+        )
         if cached is not None and not cached.empty:
+            try:
+                logger.info(
+                    f"Cache hit: {data_type} {symbol} {timeframe} "
+                    f"[{cached['timestamp'].min()} -> {cached['timestamp'].max()}], rows={len(cached):,}"
+                )
+            except Exception:
+                logger.info(f"Cache hit: {data_type} {symbol} {timeframe}, rows={len(cached):,}")
+            # Populate in-memory store so downstream readers (e.g., OMS) can source prices
             filtered_data = cached
 
         else:
+            logger.info(
+                f"Cache miss: {data_type} {symbol} {timeframe} "
+                f"[{pd.Timestamp(start_date)} -> {pd.Timestamp(end_date)}], fetching from network"
+            )
             if data_type == "mark_ohlcv_futures":
                 self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
                 filtered_data = self.perpetual_mark_ohlcv_data.get(symbol)
