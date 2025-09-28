@@ -62,7 +62,7 @@ def main():
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(minutes = 15),
+        time_step=timedelta(days = 1),
         market_type="futures"
 
     )
