@@ -80,8 +80,11 @@ class Backtester:
                 dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
             elif market_type == "futures":
                 print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
-                dm.load_data_period(sym, desired_timeframe, 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                # this is data for the backtest loop 
                 dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+
+                # this is data for price taking estiamtions when the position is opened  and risk management 
+                dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
             else:
                 raise ValueError(f"Invalid market type: {market_type}")
 
@@ -107,7 +110,7 @@ class Backtester:
         if time_step is None:
             time_step = timedelta(minutes=15)
         strategy.oms_client.set_timestep(time_step)
-        
+
         # Run backtest
         iteration = 0
 

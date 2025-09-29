@@ -214,13 +214,13 @@ class BacktesterOMS:
                 df = df.copy()
                 df['timestamp'] = pd.to_datetime(ts, errors='coerce')
             # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
-            df_now = df[df['timestamp'] <= (self.current_time + self.timestep)]
+            df_now = df[df['timestamp'] <= (self.current_time + timedelta(minutes = 15))]
             print(f"DEBUG df_now = {len(df_now)}")
             if df_now.empty:
                 return None
             price = float(df_now['close'].iloc[-1])
             print(f"DEBUG timestamp = {df_now['timestamp'].iloc[-1]}")
-            print(f"DEBUG current_time = {self.current_time + self.timestep}")
+            print(f"DEBUG current_time = {self.current_time}")
             print(f"DEBUG price = {price}")
             return price
         except Exception as e:
