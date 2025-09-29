@@ -41,6 +41,7 @@ class BacktesterOMS:
         self._price_cache_time: Optional[datetime] = None
         self._price_cache: Dict[Tuple[str, str], float] = {}
         self.timestep = None
+        
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
@@ -194,7 +195,11 @@ class BacktesterOMS:
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
     def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
-        """Get current price for a symbol (simplified, cache-aware)."""
+        """Get current price for a symbol 
+        Will use cache if availble to srouce the price that is a bit ahead of the current price.
+        This is done for the sake of order being executed after and not before the decision.
+        Was tested on hourly data, not 15 minutes or less so behaviour there is less known and might lead to underestimation of the pnl
+        """
         if not self.data_manager or not self.current_time:
             return None
 
@@ -203,7 +208,6 @@ class BacktesterOMS:
             store = self.data_manager.spot_ohlcv_data if instrument_type == 'spot' else (
                 self.data_manager.perpetual_mark_ohlcv_data if instrument_type == 'future' else None
             )
-            print(f"DEBUG store = {len(store)}")
             if store is None:
                 raise ValueError(f"Invalid price type: {instrument_type}")
             df = store.get(base_symbol)
@@ -215,13 +219,10 @@ class BacktesterOMS:
                 df['timestamp'] = pd.to_datetime(ts, errors='coerce')
             # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
             df_now = df[df['timestamp'] <= (self.current_time + timedelta(minutes = 15))]
-            print(f"DEBUG df_now = {len(df_now)}")
+
             if df_now.empty:
                 return None
             price = float(df_now['close'].iloc[-1])
-            print(f"DEBUG timestamp = {df_now['timestamp'].iloc[-1]}")
-            print(f"DEBUG current_time = {self.current_time}")
-            print(f"DEBUG price = {price}")
             return price
         except Exception as e:
             logger.error(f"Error getting current {instrument_type} price for {symbol}: {e}")
@@ -235,11 +236,12 @@ class BacktesterOMS:
         pnl = 0.0
         if current_price and pos['quantity'] != 0:
             if pos['side'] == 'LONG':
-                pnl = pos['quantity'] * (current_price - pos['entry_price'])
+                pnl = pos['quantity'] * (current_price - pos['entry_price']) - 0.00023* pos['quantity'] * pos['entry_price']
             elif pos['side'] == 'SHORT':
-                pnl = pos['quantity'] * (pos['entry_price'] - current_price)
+                pnl = pos['quantity'] * (pos['entry_price'] - current_price) - 0.00023* pos['quantity'] * pos['entry_price']
             pos['value'] = abs(pos['quantity']) * current_price
         return pnl
+
 
     def get_total_portfolio_value(self) -> float:
         """Get total portfolio value including balances and appropriate position valuation.

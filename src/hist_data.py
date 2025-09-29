@@ -3,7 +3,7 @@
 Historical Data Collection Module
 
 This module provides a comprehensive interface for collecting historical cryptocurrency
-market data from Binance using the CCXT library. It supports both spot and perpetual
+market data from Binance using the CCXT library. It supports spot and perpetual
 futures markets with various data types including OHLCV, trades, funding rates, and
 open interest data.
 
@@ -38,7 +38,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import logging
 from ccxt import binance as binance_sync
-from ccxt.pro import binance as binance_pro
 import re
 from typing import Optional, Dict, Tuple
 
@@ -109,18 +108,6 @@ class HistoricalDataCollector:
         self.funding_rates_data = {}
         self.open_interest_data = {}
         
-        # Initialize live data exchanges (WebSocket)
-        self.live_futures_exchange = binance_pro({
-            'sandbox': False,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
-
-        self.live_spot_exchange = binance_pro({
-            'sandbox': False,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
         
         # Initialize historical data exchanges (REST API)
         self.spot_exchange = binance_sync({
@@ -135,18 +122,8 @@ class HistoricalDataCollector:
             'options': {'defaultType': 'future'}
         })
 
-    async def close(self):
+    def close(self):
         """Close underlying exchange clients (websocket and REST)."""
-        try:
-            if hasattr(self, 'live_futures_exchange') and self.live_futures_exchange is not None:
-                await self.live_futures_exchange.close()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'live_spot_exchange') and self.live_spot_exchange is not None:
-                await self.live_spot_exchange.close()
-        except Exception:
-            pass
         try:
             if hasattr(self, 'spot_exchange') and self.spot_exchange is not None and hasattr(self.spot_exchange, 'close'):
                 self.spot_exchange.close()
@@ -299,13 +276,6 @@ class HistoricalDataCollector:
             timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
         )
         if cached is not None and not cached.empty:
-            try:
-                logger.info(
-                    f"Cache hit: {data_type} {symbol} {timeframe} "
-                    f"[{cached['timestamp'].min()} -> {cached['timestamp'].max()}], rows={len(cached):,}"
-                )
-            except Exception:
-                logger.info(f"Cache hit: {data_type} {symbol} {timeframe}, rows={len(cached):,}")
             # Populate in-memory store so downstream readers (e.g., OMS) can source prices
             if data_type == 'ohlcv_spot':
                 self.spot_ohlcv_data[symbol] = cached
@@ -888,33 +858,6 @@ class HistoricalDataCollector:
         else:
             logger.error(f"  No perpetual trades data for {symbol}")
             return None
-
-
-
-    async def collect_live_futures_ohlcv(self, symbol: str):
-        symbol = self._convert_symbol_to_ccxt(symbol, "future")
-        try:
-            data = await self.live_futures_exchange.watch_ohlcv(symbol)
-            rows = data if (data and isinstance(data[0], (list, tuple))) else [data]
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-        except Exception as e:
-            logger.error(f"Failed to collect live futures OHLCV data for {symbol}: {e}")
-            return None
-
-    async def collect_live_spot_ohlcv(self, symbol: str):
-        symbol = self._convert_symbol_to_ccxt(symbol, "spot")
-        try:
-            data = await self.live_spot_exchange.watch_ohlcv(symbol)
-            rows = data if (data and isinstance(data[0], (list, tuple))) else [data]
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-        except Exception as e:
-            logger.error(f"Failed to collect live spot OHLCV data for {symbol}: {e}")
-            return None
-
     # Helper methods with documentation
     def _convert_symbol_to_ccxt(self, symbol: str, market_type: str = "spot"):
         """

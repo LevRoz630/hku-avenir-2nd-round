@@ -51,8 +51,10 @@ class PairTradingStrategy:
         window_days = max(self.lookback_days + 2, 3)
         window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
         end_for_load = self.oms_client.current_time
-        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
-        df = df.copy()
+        # df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
+        df = dm.perpetual_index_ohlcv_data.get(base_symbol)
+        df = df[df['timestamp'].between(window_start, self.oms_client.current_time, inclusive='left')]
+
         df = df.sort_values('timestamp')
         print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
         df = df.set_index('timestamp')
@@ -110,7 +112,7 @@ class PairTradingStrategy:
         print(f"DEBUG run now={self.oms_client.current_time} total_equity={total_equity}")
 
         # Enforce 90% allocation cap across all open pairs
-        max_alloc_total = 0.90 * total_equity
+        max_alloc_total = 0.1 * total_equity
         # Estimate current deployed margin notionally as sum of per-leg USDT allocations kept in state
         # We will track per-pair intended alloc to cap new entries
         if not hasattr(self, '_alloc_state'):
@@ -152,7 +154,7 @@ class PairTradingStrategy:
                     pass
                 else:
                     # Dollar allocation per pair (total across both legs)
-                    alloc_cap = max(0.0, min(1.0, p['max_alloc_frac'])) * total_equity
+                    alloc_cap = max(0.0, min(1.0, p['max_alloc_frac']))  * max_alloc_total * 5
                     # Scale with z-score up to 2x at z >= 2*entry
                     scale = min(abs(z) / max(p['entry_z'], 1e-6), 2.0)
                     total_pair_usdt = alloc_cap * scale
@@ -166,7 +168,8 @@ class PairTradingStrategy:
                     # Check portfolio cap before opening
                     current_deployed = sum(self._alloc_state.values())
                     print(f"DEBUG alloc_check deployed={current_deployed} add={total_pair_usdt} cap={max_alloc_total}")
-                    if current_deployed + total_pair_usdt <= max_alloc_total:
+
+                    if current_deployed + total_pair_usdt <= max_alloc_total*5:
                         if z > 0:
                             if p['current_side'] == 'long_spread':
                                 self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
@@ -198,7 +201,7 @@ class PairTradingStrategy:
                 p['is_open'] = False
                 p['current_side'] = None
                 self._alloc_state[id(p)] = 0.0
-                print(f"DEBUG closed pair=({a_base},{b_base})")
+                
             else:
                 # Hold
                 continue

@@ -25,7 +25,6 @@ def main():
         {
             'legs': ['APT-USDT', 'NEAR-USDT'],
             'use_futures': True,
-            'lookback_days': 7,
             'entry_z': 1.5,
             'exit_z': 0.5,
             'max_alloc_frac': 0.5,
@@ -33,7 +32,6 @@ def main():
         {
             'legs': ['OXT-USDT', 'ROSE-USDT'],
             'use_futures': True,
-            'lookback_days': 3,
             'entry_z': 1.5,
             'exit_z': 0.5,
             'max_alloc_frac': 0.5,
@@ -52,22 +50,24 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now() - timedelta(days=30)
+    start_date = datetime.now() - timedelta(days=40)
     end_date = datetime.now()
 
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)
-    results = backtester.run_backtest(
+    results = backtester.run_permutation_backtest(
         strategy=strategy,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(days = 1),
-        market_type="futures"
+        market_type="futures",
+        permutations = 10
+
 
     )
-
-    backtester.print_results(results)
+    print(results)
+    # backtester.print_results(results)
 
 if __name__ == "__main__":
     main()
