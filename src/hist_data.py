@@ -363,13 +363,20 @@ class HistoricalDataCollector:
 
 
     async def load_data_live(self, symbol: str, data_type: str):
+        
         try:
-            if data_type == "ohlcv_perpetual":
-                return await self.futures_exchange_pro.watch_ohlcv(symbol)
+            # Normalize symbols like "btc-usdt-perp" or "btc-usdt" to "BTC/USDT"
+            watch_symbol = self._normalize_symbol_pair(symbol)
+            if watch_symbol is None:
+                raise ValueError(f"Unable to normalize symbol: {symbol}")
+
+            if data_type == "ohlcv_futures":
+                return await self.futures_exchange_pro.watch_ohlcv(watch_symbol)
             elif data_type == "ohlcv_spot":
-                return await self.spot_exchange_pro.watch_ohlcv(symbol)
+                return await self.spot_exchange_pro.watch_ohlcv(watch_symbol)
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
+
         except Exception as e:
             logger.error(f"Failed to load data live: {e}")
             return None
@@ -941,6 +948,34 @@ class HistoricalDataCollector:
                 base = symbol.split('-')[0]
                 return f"{base}/USDT:USDT"
         except:
+            return None
+
+    def _normalize_symbol_pair(self, symbol: str) -> str | None:
+        """
+        Normalize various symbol inputs to CCXT pair format BASE/QUOTE.
+        Examples:
+          - "BTC-USDT-PERP" -> "BTC/USDT"
+          - "BTC-USDT" -> "BTC/USDT"
+          - "BTC/USDT" -> "BTC/USDT" (unchanged)
+        """
+        try:
+            s = str(symbol).strip()
+            if not s:
+                return None
+            # Already in CCXT pair format
+            if '/' in s:
+                base, quote = s.split('/', 1)
+                return f"{base.upper()}/{quote.upper()}"
+            # Remove potential "-PERP" suffix and split by '-'
+            s = s.upper().replace("-PERP", "")
+            parts = [p for p in s.split('-') if p]
+            if len(parts) == 1:
+                base = parts[0]
+                quote = 'USDT'
+            else:
+                base, quote = parts[0], parts[1]
+            return f"{base}/{quote}"
+        except Exception:
             return None
 
     def _get_number_of_periods(self, timeframe: str, start_time: datetime, end_time: datetime):
