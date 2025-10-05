@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from oms_simulation import BacktesterOMS
 import logging
@@ -22,6 +22,7 @@ class Backtester:
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
+        
     def run_backtest(self, 
                         strategy: Any,
                         symbols: List[str],
@@ -48,7 +49,7 @@ class Backtester:
         Returns:
             Results dict with PnL series and summary metrics
         """
- 
+        
 
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)

@@ -34,7 +34,7 @@ Examples
 
 import pandas as pd
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone 
 from pathlib import Path
 import logging
 from ccxt import binance
@@ -42,6 +42,8 @@ from ccxt.pro import binance as binance_pro
 
 import re
 from typing import Optional, Dict, Tuple
+from tools import _is_utc, _get_number_of_periods, _get_timeframe_to_minutes
+from tools import _convert_symbol_to_ccxt, _normalize_symbol_pair
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -149,32 +151,6 @@ class HistoricalDataCollector:
             self.futures_exchange_pro = None
             self.futures_exchange = None
             raise ValueError(f"CCXT exchange initialization failed: {e}")
-
-
-    def close(self):
-        """Close underlying exchange clients (websocket and REST)."""
-        try:
-            if hasattr(self, 'spot_exchange') and self.spot_exchange is not None and hasattr(self.spot_exchange, 'close'):
-                self.spot_exchange.close()
-        except Exception as e:
-            logger.error(f"Failed to close exchange: {e}")
-            pass
-        try:
-            if hasattr(self, 'futures_exchange') and self.futures_exchange is not None and hasattr(self.futures_exchange, 'close'):
-                self.futures_exchange.close()
-        except Exception as e:
-            logger.error(f"Failed to close exchange: {e}")
-        try:
-            if hasattr(self, 'spot_exchange_pro') and self.spot_exchange_pro is not None and hasattr(self.spot_exchange_pro, 'close'):
-                self.spot_exchange_pro.close()
-        except Exception as e:
-            logger.error(f"Failed to close exchange: {e}")
-        try:
-            if hasattr(self, 'futures_exchange_pro') and self.futures_exchange_pro is not None and hasattr(self.futures_exchange_pro, 'close'):
-                self.futures_exchange_pro.close()
-        except Exception as e:
-            logger.error(f"Failed to close exchange: {e}")
-
     # ------------------------
     # Cache utilities
     # ------------------------
@@ -296,11 +272,18 @@ class HistoricalDataCollector:
         
         if start_date is None or end_date is None:
             raise ValueError("Start and end dates are required")
+
         if start_date > end_date:
             raise ValueError("Start date must be before end date")
         
+        # check if start_date and end_date are in UTC timezone
+        _is_utc(start_date)
+        _is_utc(end_date)
+
         if data_type not in data_types:
             raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
+        
+
         
         # Cache-first, then collect
         kind_map = {
@@ -363,17 +346,29 @@ class HistoricalDataCollector:
 
 
     async def load_data_live(self, symbol: str, data_type: str):
-        
         try:
             # Normalize symbols like "btc-usdt-perp" or "btc-usdt" to "BTC/USDT"
-            watch_symbol = self._normalize_symbol_pair(symbol)
+            watch_symbol = _normalize_symbol_pair(symbol)
             if watch_symbol is None:
                 raise ValueError(f"Unable to normalize symbol: {symbol}")
 
             if data_type == "ohlcv_futures":
-                return await self.futures_exchange_pro.watch_ohlcv(watch_symbol)
+                df = await self.futures_exchange_pro.watch_ohlcv(watch_symbol)
+                df = pd.DataFrame(df, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df['symbol'] = symbol
+                df['market_type'] = 'perpetual'
+                await self.futures_exchange_pro.close()
+                return df
+
             elif data_type == "ohlcv_spot":
-                return await self.spot_exchange_pro.watch_ohlcv(watch_symbol)
+                df = await self.spot_exchange_pro.watch_ohlcv(watch_symbol)
+                df = pd.DataFrame(df, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df['symbol'] = symbol
+                df['market_type'] = 'spot'
+                await self.spot_exchange_pro.close()
+                return df
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
 
@@ -428,13 +423,12 @@ class HistoricalDataCollector:
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
 
-
         
         filename = f"spot_{symbol.replace('-', '_')}_ohlcv_{timeframe}_{start_str}_{end_str}.parquet"
 
         logger.info(f"Collecting spot OHLCV for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "spot")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "spot")
 
         # Collect data using unified collection method
         all_ohlcv = self._loop_data_collection(
@@ -917,111 +911,7 @@ class HistoricalDataCollector:
         else:
             logger.error(f"  No perpetual trades data for {symbol}")
             return None
-    # Helper methods with documentation
-    def _convert_symbol_to_ccxt(self, symbol: str, market_type: str = "spot"):
-        """
-        Convert trading symbol format for CCXT API calls.
-        
-        Parameters
-        ----------
-        symbol : str
-            Trading symbol in standard format (e.g., "BTC-USDT", "ETH-USDT-PERP")
-        market_type : str, optional
-            Market type: "spot" or "future". Default is "spot".
-        
-        Returns
-        -------
-        str or None
-            Converted symbol format for CCXT API calls.
-            For spot: "BTC-USDT" -> "BTC/USDT"
-            For futures: "BTC-USDT-PERP" -> "BTC/USDT:USDT"
-            Returns None if conversion fails.
-        """
-        try:
-            if market_type == "spot":
-                # For spot: BTC-USDT -> BTC/USDT
-                if '-' in symbol:
-                    return symbol.replace('-', '/')
-                return symbol
-            else:
-                # For futures: BTC-USDT-PERP -> BTC/USDT:USDT
-                base = symbol.split('-')[0]
-                return f"{base}/USDT:USDT"
-        except:
-            return None
-
-    def _normalize_symbol_pair(self, symbol: str) -> str | None:
-        """
-        Normalize various symbol inputs to CCXT pair format BASE/QUOTE.
-        Examples:
-          - "BTC-USDT-PERP" -> "BTC/USDT"
-          - "BTC-USDT" -> "BTC/USDT"
-          - "BTC/USDT" -> "BTC/USDT" (unchanged)
-        """
-        try:
-            s = str(symbol).strip()
-            if not s:
-                return None
-            # Already in CCXT pair format
-            if '/' in s:
-                base, quote = s.split('/', 1)
-                return f"{base.upper()}/{quote.upper()}"
-            # Remove potential "-PERP" suffix and split by '-'
-            s = s.upper().replace("-PERP", "")
-            parts = [p for p in s.split('-') if p]
-            if len(parts) == 1:
-                base = parts[0]
-                quote = 'USDT'
-            else:
-                base, quote = parts[0], parts[1]
-            return f"{base}/{quote}"
-        except Exception:
-            return None
-
-    def _get_number_of_periods(self, timeframe: str, start_time: datetime, end_time: datetime):
-        """
-        Calculate the number of periods between two datetime objects for a given timeframe.
-        
-        Parameters
-        ----------
-        timeframe : str
-            Timeframe string (e.g., '1m', '5m', '15m', '1h', '1d')
-        start_time : datetime
-            Start datetime
-        end_time : datetime
-            End datetime
-        
-        Returns
-        -------
-        int
-            Number of periods between start_time and end_time
-        """
-        minutes = self._get_timeframe_to_minutes(timeframe)
-        total_minutes = (end_time - start_time).total_seconds() / 60
-        total_periods = int(total_minutes // minutes)
-        return total_periods
-
-    def _get_timeframe_to_minutes(self, timeframe: str):
-        """
-        Convert timeframe string to minutes.
-        
-        Parameters
-        ----------
-        timeframe : str
-            Timeframe string (e.g., '1m', '5m', '15m', '1h', '1d')
-        
-        Returns
-        -------
-        int
-            Number of minutes for the timeframe. Defaults to 15 if timeframe not recognized.
-        """
-        periods_map = {
-            '1m': 1, '5m': 5, '15m': 15, '30m': 30,
-            '1h': 60, '2h': 120, '4h': 240, '6h': 360,
-            '12h': 720, '1d': 1440,
-        }
-        return periods_map.get(timeframe, 15)
-
+  
     def _loop_data_collection(self, function, ccxt_symbol: str, timeframe: str, limit: int,
                             start_time: datetime, end_time: datetime, params=None, logger=None):
         """
@@ -1055,9 +945,9 @@ class HistoricalDataCollector:
             List of collected data records
         """
         # Calculate periods per day based on timeframe
-        total_periods = self._get_number_of_periods(timeframe, start_time, end_time)
+        total_periods = _get_number_of_periods(timeframe, start_time, end_time)
         num_batches = (total_periods + limit - 1) // limit
-        minutes = self._get_timeframe_to_minutes(timeframe)
+        minutes = _get_timeframe_to_minutes(timeframe)
         all_data = []
 
         for batch in range(num_batches):
