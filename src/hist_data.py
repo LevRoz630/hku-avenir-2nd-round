@@ -340,8 +340,21 @@ class HistoricalDataCollector:
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
 
+        # Make both dataframe timestamps and bounds tz-aware UTC for safe comparison
+        ts = filtered_data["timestamp"]
+        if not pd.api.types.is_datetime64_any_dtype(ts):
+            filtered_data["timestamp"] = pd.to_datetime(ts, errors='coerce', utc=True)
+        else:
+            if getattr(ts.dt, 'tz', None) is None:
+                filtered_data["timestamp"] = ts.dt.tz_localize('UTC')
+            else:
+                filtered_data["timestamp"] = ts.dt.tz_convert('UTC')
+
+        s = pd.Timestamp(start_date, tz='UTC') if pd.Timestamp(start_date).tz is None else pd.Timestamp(start_date).tz_convert('UTC')
+        e = pd.Timestamp(end_date, tz='UTC') if pd.Timestamp(end_date).tz is None else pd.Timestamp(end_date).tz_convert('UTC')
+
         # Filter data to the requested time period
-        filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
+        filtered_data = filtered_data[(filtered_data["timestamp"] >= s) & (filtered_data["timestamp"] <= e)]
         return filtered_data
 
 
@@ -413,6 +426,8 @@ class HistoricalDataCollector:
         >>> spot_data = collector.collect_spot_ohlcv("BTC-USDT", "1h", start_time, export=True)
         >>> print(spot_data.head())
         """
+        _is_utc(start_time)
+        _is_utc(end_time)
         max_records_per_request = 1000
         all_ohlcv = []
 
@@ -498,10 +513,13 @@ class HistoricalDataCollector:
         >>> mark_data = collector.collect_perpetual_mark_ohlcv("BTC-USDT", "1h", start_time, export=True)
         >>> print(mark_data.head())
         """
+
         max_records_per_request = 1000
         all_ohlcv = []
 
-        end_time = datetime.now()
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -511,7 +529,7 @@ class HistoricalDataCollector:
         filename = f"perpetual_{symbol.replace('-', '_')}_mark_{timeframe}_{start_str}_{end_str}.parquet"
         logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with mark price parameter
         all_ohlcv = self._loop_data_collection(
@@ -582,10 +600,13 @@ class HistoricalDataCollector:
         >>> index_data = collector.collect_perpetual_index_ohlcv("BTC-USDT", "1h", start_time, export=True)
         >>> print(index_data.head())
         """
+
         max_records_per_request = 1000
         all_ohlcv = []
 
-        end_time = datetime.now()
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
         # Generate safe filename
@@ -595,7 +616,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with index price parameter
         all_ohlcv = self._loop_data_collection(
@@ -662,7 +683,10 @@ class HistoricalDataCollector:
         >>> funding_data = collector.collect_funding_rates("BTC-USDT", start_time, export=True)
         >>> print(funding_data.head())
         """
-        end_time = datetime.now()
+
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -673,7 +697,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting funding rates for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         since = int(start_time.timestamp() * 1000)
         
         try:
@@ -760,10 +784,13 @@ class HistoricalDataCollector:
         >>> oi_data = collector.collect_open_interest("BTC-USDT", "1h", start_time, export=True)
         >>> print(oi_data.head())
         """
+
         max_records_per_request = 1000
         all_open_interest = []
 
-        end_time = datetime.now()
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -774,7 +801,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting open interest for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method
         all_open_interest = self._loop_data_collection(
@@ -849,7 +876,10 @@ class HistoricalDataCollector:
         >>> trades_data = collector.collect_perpetual_trades("BTC-USDT", start_time, export=True)
         >>> print(trades_data.head())
         """
-        end_time = datetime.now()
+
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -861,7 +891,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual trades for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         all_trades = []
         current_start_time = start_time
         
@@ -944,6 +974,8 @@ class HistoricalDataCollector:
         list
             List of collected data records
         """
+        _is_utc(start_time)
+        _is_utc(end_time)
         # Calculate periods per day based on timeframe
         total_periods = _get_number_of_periods(timeframe, start_time, end_time)
         num_batches = (total_periods + limit - 1) // limit

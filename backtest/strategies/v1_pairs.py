@@ -56,7 +56,6 @@ class PairTradingStrategy:
         df = df[df['timestamp'].between(window_start, self.oms_client.current_time, inclusive='left')]
 
         df = df.sort_values('timestamp')
-        print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
         df = df.set_index('timestamp')
         # Resample to daily closes
         daily = df['close'].resample('1D').last().dropna()
@@ -65,7 +64,6 @@ class PairTradingStrategy:
         # Don't take the last close as it might leak future info about the current day 
         cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
-        print(f"DEBUG filtered_pre_now days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}, shape:{daily.shape}")
         return daily
 
     def _compute_beta_and_z(self, a_base: str, b_base: str):
@@ -78,13 +76,10 @@ class PairTradingStrategy:
 
         a_series = self._get_daily_closes(a_base)
         b_series = self._get_daily_closes(b_base)
-        print(f"debug a series shape{a_series.shape} b series shape{b_series.shape}")
         if a_series.empty or b_series.empty:
-            print(f"DEBUG series_empty a_len={len(a_series)} b_len={len(b_series)}")
             return None, None, None
         # Align on common dates
         df = pd.concat([a_series.rename('a'), b_series.rename('b')], axis=1).dropna()
-        print(f"DEBUG aligned_len={len(df)} a_range=({a_series.index.min()} -> {a_series.index.max()}) b_range=({b_series.index.min()} -> {b_series.index.max()})")
         # Use last (lookback + 1) daily points; last one is "current" bar
         window = df.iloc[-(self.lookback_days + 1):]
         hist = window.iloc[:-1]
@@ -102,15 +97,12 @@ class PairTradingStrategy:
             return beta, 0.0, 0.0
         current_spread = float(curr['a'] - beta * curr['b'])
         z = (current_spread - spread_mean) / spread_std
-        print(f"DEBUG beta_z a={a_base} b={b_base} beta={beta:.4f} z={float(z):.3f} std={spread_std:.6f}")
         return beta, float(z), spread_std
 
 
     def run_strategy(self):
         # Portfolio value for sizing
         total_equity = float(self.oms_client.get_total_portfolio_value() or 0.0)
-        print(f"DEBUG run now={self.oms_client.current_time} total_equity={total_equity}")
-
         # Enforce 90% allocation cap across all open pairs
         max_alloc_total = 0.1 * total_equity
         # Estimate current deployed margin notionally as sum of per-leg USDT allocations kept in state
@@ -128,10 +120,8 @@ class PairTradingStrategy:
             a_base = p['a_symbol'].replace('-PERP', '')
             b_base = p['b_symbol'].replace('-PERP', '')
 
-            print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback_days}")
             beta, z, std = self._compute_beta_and_z(a_base, b_base)
             if beta is None:
-                print(f"DEBUG skip_pair reason=no_beta_z pair=({a_base},{b_base})")
                 continue
             p['last_beta'] = beta
 
@@ -145,7 +135,6 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
             if enter:
                 # Enforce one entry per calendar day
                 day_key = (now.year, now.month, now.day)
@@ -167,7 +156,6 @@ class PairTradingStrategy:
 
                     # Check portfolio cap before opening
                     current_deployed = sum(self._alloc_state.values())
-                    print(f"DEBUG alloc_check deployed={current_deployed} add={total_pair_usdt} cap={max_alloc_total}")
 
                     if current_deployed + total_pair_usdt <= max_alloc_total*5:
                         if z > 0:
@@ -192,7 +180,6 @@ class PairTradingStrategy:
                         p['is_open'] = True
                         self._alloc_state[id(p)] = total_pair_usdt
                         self._last_entry_day[id(p)] = day_key
-                        print(f"DEBUG opened side={p['current_side']} a_sym={a_sym} b_sym={b_sym} total_alloc={total_pair_usdt}")
 
             elif exit_ or stop:
                 # Close both legs

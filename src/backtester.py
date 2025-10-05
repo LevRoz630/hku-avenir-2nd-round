@@ -3,9 +3,10 @@ from typing import List, Dict, Any
 from oms_simulation import BacktesterOMS
 import logging
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from hist_data import HistoricalDataCollector
-from format_utils import format_positions_table, format_balances_table
+from format_utils import format_positions_table, format_balances_table 
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class Backtester:
             Results dict with PnL series and summary metrics
         """
         
+        
 
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
@@ -64,10 +66,8 @@ class Backtester:
 
         for sym in base_symbols:
             if market_type == "spot":
-                print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                 dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
             elif market_type == "futures":
-                print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
                 # this is data for the backtest loop 
                 dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
@@ -85,8 +85,16 @@ class Backtester:
                     first = df['timestamp'].min()  # first available candle for this store
                     earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
         aligned_start = start_date
-        if earliest_ts is not None and start_date < earliest_ts:
-            aligned_start = earliest_ts
+        if earliest_ts is not None:
+            # Ensure both are comparable (convert to naive UTC if needed)
+            s = pd.Timestamp(start_date)
+            e = pd.Timestamp(earliest_ts)
+            if s.tz is not None:
+                s = s.tz_convert('UTC').tz_localize(None)
+            if e.tz is not None:
+                e = e.tz_convert('UTC').tz_localize(None)
+            if s < e:
+                aligned_start = earliest_ts
 
         # Define start and end times for the strategy
         strategy.start_time = aligned_start
@@ -132,7 +140,9 @@ class Backtester:
         # Calculate final performance metrics
         self.calculate_performance_metrics()
         
-        self.returns = self.portfolio_values.diff().dropna()
+        # Convert portfolio_values to pandas Series to use .diff()
+        portfolio_series = pd.Series(self.portfolio_values)
+        self.returns = portfolio_series.diff().dropna()
         # Return results
         results = {
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
@@ -173,11 +183,8 @@ class Backtester:
             if i == 0:
                 for sym in symbols:
                     if market_type == "spot":
-                        print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                         dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
                     elif market_type == "futures":
-                        print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
-                        # this is data for the backtest loop 
                         dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
                         # this is data for price taking estiamtions when the position is opened  and risk management 
@@ -259,11 +266,8 @@ class Backtester:
 
             for sym in symbols:
                 if market_type == "spot":
-                    print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                     dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
                 elif market_type == "futures":
-                    print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
-                    # this is data for the backtest loop 
                     dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
                     # this is data for price taking estiamtions when the position is opened  and risk management 
