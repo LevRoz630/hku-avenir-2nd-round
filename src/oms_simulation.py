@@ -32,11 +32,11 @@ class OMSClient:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
-        self.balance = {"USDT": 10000.0}  # Balance for Spot trading
+        self.balance = {"USDT": 10000.0}  # Balance for trading
         self.trade_history = []  # All trades executed
         self.performance_metrics = {}
         self.current_time = None  # Current backtest time
-        self.data_manager = HistoricalDataCollector(historical_data_dir)  # Will be set by backtester
+        self.data_manager = None  # Will be set by backtester
         # Simple per-timestamp price cache: { (symbol, instrument_type): price }
         self._price_cache_time: Optional[datetime] = None
         self._price_cache: Dict[Tuple[str, str], float] = {}

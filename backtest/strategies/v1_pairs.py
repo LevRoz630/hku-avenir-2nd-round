@@ -51,7 +51,6 @@ class PairTradingStrategy:
         window_days = max(self.lookback_days + 2, 3)
         window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
         end_for_load = self.oms_client.current_time
-        print(f"DEBUG {self.data_manager._cache_glob('index_ohlcv_futures', base_symbol, '15m')}")
         df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
 
         df = df[df['timestamp'].between(window_start, self.oms_client.current_time, inclusive='left')]

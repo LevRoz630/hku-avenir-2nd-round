@@ -1022,7 +1022,7 @@ class HistoricalDataCollector:
                     all_data.extend(data)
                     end_time = batch_start_time
                     if logger:
-                        logger.info(f"  Data collection batch {batch+1}/{num_batches}: {len(data)} records")
+                        logger.info(f"  Data collection batch {batch+1}/{num_batches}: {batch_size} records")
                 else:
                     break
                 
