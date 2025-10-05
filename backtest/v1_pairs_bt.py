@@ -55,16 +55,13 @@ def main():
 
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)
-    results = backtester.run_permutation_backtest(
+    results = backtester.run_backtest(
         strategy=strategy,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(days = 1),
         market_type="futures",
-        permutations = 10
-
-
     )
     print(results)
     # backtester.print_results(results)

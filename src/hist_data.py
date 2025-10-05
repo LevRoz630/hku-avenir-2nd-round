@@ -37,7 +37,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
-from ccxt import binance as binance_sync
+from ccxt import binance
+from ccxt.pro import binance as binance_pro
+
 import re
 from typing import Optional, Dict, Tuple
 
@@ -108,32 +110,70 @@ class HistoricalDataCollector:
         self.funding_rates_data = {}
         self.open_interest_data = {}
         
-        
-        # Initialize historical data exchanges (REST API)
-        self.spot_exchange = binance_sync({
-            'sandbox': False,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
-        
-        self.futures_exchange = binance_sync({
-            'sandbox': False,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
+        try:
+            # Initialize historical data exchanges (REST API)
+            self.spot_exchange = binance({
+                'sandbox': False,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+
+            logger.info("Hist spot exchange initialized successfully")
+
+            self.spot_exchange_pro = binance_pro({
+                'sandbox': False,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+
+            logger.info("Pro Binance spot exchange initialized successfully")
+
+            self.futures_exchange_pro = binance_pro({
+                'sandbox': False,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'future'}
+            })
+            logger.info("Pro Binance futures exchange initialized successfully")
+
+            self.futures_exchange = binance({
+                'sandbox': False,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'future'}
+            })
+            logger.info("Hist futures exchange initialized successfully")
+
+        except Exception as e:
+            logger.error(f"CCXT exchange initialization failed: {e}")
+            self.spot_exchange = None
+            self.spot_exchange_pro = None
+            self.futures_exchange_pro = None
+            self.futures_exchange = None
+            raise ValueError(f"CCXT exchange initialization failed: {e}")
+
 
     def close(self):
         """Close underlying exchange clients (websocket and REST)."""
         try:
             if hasattr(self, 'spot_exchange') and self.spot_exchange is not None and hasattr(self.spot_exchange, 'close'):
                 self.spot_exchange.close()
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to close exchange: {e}")
             pass
         try:
             if hasattr(self, 'futures_exchange') and self.futures_exchange is not None and hasattr(self.futures_exchange, 'close'):
                 self.futures_exchange.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to close exchange: {e}")
+        try:
+            if hasattr(self, 'spot_exchange_pro') and self.spot_exchange_pro is not None and hasattr(self.spot_exchange_pro, 'close'):
+                self.spot_exchange_pro.close()
+        except Exception as e:
+            logger.error(f"Failed to close exchange: {e}")
+        try:
+            if hasattr(self, 'futures_exchange_pro') and self.futures_exchange_pro is not None and hasattr(self.futures_exchange_pro, 'close'):
+                self.futures_exchange_pro.close()
+        except Exception as e:
+            logger.error(f"Failed to close exchange: {e}")
 
     # ------------------------
     # Cache utilities
@@ -322,6 +362,18 @@ class HistoricalDataCollector:
         return filtered_data
 
 
+    async def load_data_live(self, symbol: str, data_type: str):
+        try:
+            if data_type == "ohlcv_perpetual":
+                return await self.futures_exchange_pro.watch_ohlcv(symbol)
+            elif data_type == "ohlcv_spot":
+                return await self.spot_exchange_pro.watch_ohlcv(symbol)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+        except Exception as e:
+            logger.error(f"Failed to load data live: {e}")
+            return None
+    
     def collect_spot_ohlcv(self, symbol: str, timeframe: str = '15m', 
                           start_time: datetime = None, export: bool = False):
         """
