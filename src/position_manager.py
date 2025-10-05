@@ -12,47 +12,90 @@ class PositionManager:
     def __init__(self):
         self.orders = []
         self.oms_client = None
-        self.data_manager = HistoricalDataCollector()
+        self.data_manager = None
 
 
-    def filter_orders(self, orders: List[Dict[str, Any]], oms_client: Any):
-
-        cleaned_orders = self._close_risky_orders(orders, oms_client)
-        weighted_orders = self._set_weights(cleaned_orders, oms_client)
-
+    def filter_orders(self, orders: List[Dict[str, Any]], oms_client: Any, data_manager: HistoricalDataCollector):
+        self.oms_client = oms_client
+        self.data_manager = data_manager
+        print(f"DEBUG orders: {orders}")
+        cleaned_orders = self._close_risky_orders(orders)
+        print(f"DEBUG cleaned_orders: {cleaned_orders}")
+        weighted_orders = self._set_weights(cleaned_orders)
+        print(f"DEBUG weighted_orders: {weighted_orders}")
         return weighted_orders
 
 
 
-    def _close_risky_orders(self, orders: List[Dict[str, Any]], oms_client: Any):
-        for order in self.orders:
+    def _close_risky_orders(self, orders: List[Dict[str, Any]]):
+        cleaned: List[Dict[str, Any]] = []
+        for order in orders:
             try:
-                data = self.data_manager.load_data_period(order['symbol'], '5m', 'mark_ohlcv_futures', self.oms_client.current_time - timedelta(hours = 2), self.oms_client.current_time)
-                scaled_vol  =  np.std(data['close']) / np.mean(data['close'])
+                base_symbol = order['symbol'].replace('-PERP', '')
+                data = self.data_manager.load_data_period(
+                    base_symbol,
+                    '5m',
+                    'mark_ohlcv_futures',
+                    self.oms_client.current_time - timedelta(hours=2),
+                    self.oms_client.current_time
+                )
+                if data is None or len(data) == 0:
+                    cleaned.append(order)
+                    continue
+                scaled_vol = float(np.std(data['close']) / np.mean(data['close']))
+                print(f"DEBUG scaled_vol {order['symbol']}: {scaled_vol}")
                 if scaled_vol > 1.5:
-                    order['value'] = 0
-                logger.info(f"Closed risky order: {order['symbol']}")
+                    # Flag as do-not-trade by setting value 0
+                    new_order = {**order, 'value': 0}
+                    cleaned.append(new_order)
+                else:
+                    cleaned.append(order)
             except Exception as e:
                 logger.error(f"Error closing risky orders: {e} for: {order['symbol']}")
+                cleaned.append(order)
 
-        return self.orders
+        return cleaned
 
 
-    def _set_weights(self, orders: List[Dict[str, Any]], oms_client: Any):
-
-            self.orders = orders
-            self.oms_client = oms_client
-
+    def _set_weights(self, orders: List[Dict[str, Any]]):
+            # Work on a copy to avoid mutating the input list unexpectedly
+            updated: List[Dict[str, Any]] = []
             limit = self.oms_client.balance['USDT']
-            for order in self.orders:
-                try:
-                    if order['value'] != 0:
-                        data = self.data_manager.load_data_period(order['symbol'], '15m', 'mark_ohlcv_futures', self.oms_client.current_time - timedelta(days = 1), self.oms_client.current_time)
-                        scaled_vol  =  np.std(data['close']) / np.mean(data['close'])
-                        order_weight = len(self.orders) / scaled_vol
-                        order['value'] = limit * order_weight
-            
-                except Exception as e:
-                    logger.error(f"Error setting weights: {e} for {self.order['symbol']}")
 
-            return self.orders
+            # Compute inverse-vol weights for non-zero orders
+            inv_vols = []
+            for order in orders:
+                if order.get('value', None) == 0:
+                    inv_vols.append(0.0)
+                    continue
+                try:
+                    base_symbol = order['symbol'].replace('-PERP', '')
+                    data = self.data_manager.load_data_period(
+                        base_symbol,
+                        '15m',
+                        'mark_ohlcv_futures',
+                        self.oms_client.current_time - timedelta(days=1),
+                        self.oms_client.current_time
+                    )
+                    if data is None or len(data) == 0:
+                        inv_vols.append(0.0)
+                        continue
+                    scaled_vol = float(np.std(data['close']) / np.mean(data['close']))
+                    inv_vols.append(0.0 if scaled_vol <= 0 else 1.0 / scaled_vol)
+                except Exception:
+                    inv_vols.append(0.0)
+
+            total_inv = sum(inv_vols) if inv_vols else 0.0
+
+            for idx, order in enumerate(orders):
+                try:
+                    if order.get('value', None) == 0:
+                        updated.append(order)
+                        continue
+                    weight = (inv_vols[idx] / total_inv) if total_inv > 0 else 0.0
+                    updated.append({**order, 'value': limit * weight})
+                except Exception as e:
+                    logger.error(f"Error setting weights: {e} for {order['symbol']}")
+                    updated.append(order)
+
+            return updated

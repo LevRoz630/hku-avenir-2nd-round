@@ -172,7 +172,9 @@ class HistoricalDataCollector:
         files = self._cache_glob(kind, symbol, timeframe)
         if not files:
             return None
-        s, e = pd.Timestamp(start_date), pd.Timestamp(end_date)
+        # Ensure tz-aware UTC timestamps for window bounds
+        s = pd.Timestamp(start_date).tz_convert('UTC') if pd.Timestamp(start_date).tzinfo is not None else pd.Timestamp(start_date, tz='UTC')
+        e = pd.Timestamp(end_date).tz_convert('UTC') if pd.Timestamp(end_date).tzinfo is not None else pd.Timestamp(end_date, tz='UTC')
         frames = []
         for fp in files:
             try:
@@ -192,6 +194,11 @@ class HistoricalDataCollector:
                             df['timestamp'] = pd.to_datetime(ts, errors='coerce')
                     except Exception:
                         df['timestamp'] = pd.to_datetime(ts, errors='coerce')
+                # Force cached data timestamps to UTC timezone for consistent comparisons
+                if df['timestamp'].dt.tz is None:
+                    df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+                else:
+                    df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
                 ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
                 if ts_max < s or ts_min > e:
                     continue
@@ -279,6 +286,17 @@ class HistoricalDataCollector:
         # check if start_date and end_date are in UTC timezone
         _is_utc(start_date)
         _is_utc(end_date)
+
+        # Align to timeframe boundaries to avoid ms drift affecting cache hits
+        minutes = _get_timeframe_to_minutes(timeframe)
+        def _floor_to_tf(dt: datetime) -> datetime:
+            # Floor to nearest timeframe boundary in UTC
+            epoch_minutes = int((dt - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds() // 60)
+            floored_minutes = (epoch_minutes // minutes) * minutes
+            return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=floored_minutes)
+        start_date = _floor_to_tf(start_date)
+        # Make end inclusive by flooring as well; users expect stable end
+        end_date = _floor_to_tf(end_date)
 
         if data_type not in data_types:
             raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
@@ -387,7 +405,7 @@ class HistoricalDataCollector:
             return None
     
     def collect_spot_ohlcv(self, symbol: str, timeframe: str = '15m', 
-                          start_time: datetime = None, export: bool = False):
+                          start_time: datetime = None, end_time: datetime | None = None, export: bool = False):
         """
         Collect spot market OHLCV (Open, High, Low, Close, Volume) data.
         
@@ -424,11 +442,10 @@ class HistoricalDataCollector:
         >>> print(spot_data.head())
         """
         _is_utc(start_time)
+        end_time = end_time or datetime.now(timezone.utc)
         _is_utc(end_time)
         max_records_per_request = 1000
         all_ohlcv = []
-
-        end_time = datetime.now()
         if start_time is None:
             raise ValueError("Start time is required")
         # Generate safe filename
@@ -471,7 +488,7 @@ class HistoricalDataCollector:
             return None
 
     def collect_perpetual_mark_ohlcv(self, symbol: str, timeframe: str = '15m',
-                                   start_time: datetime = None, export: bool = False):
+                                   start_time: datetime = None, end_time: datetime | None = None, export: bool = False):
         """
         Collect perpetual futures mark price OHLCV data.
         
@@ -514,7 +531,7 @@ class HistoricalDataCollector:
         max_records_per_request = 1000
         all_ohlcv = []
 
-        end_time = datetime.now(timezone.utc)
+        end_time = end_time or datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
         if start_time is None:
@@ -558,7 +575,7 @@ class HistoricalDataCollector:
             return None
 
     def collect_perpetual_index_ohlcv(self, symbol: str, timeframe: str = '15m',
-                                    start_time: datetime = None, export: bool = False):
+                                    start_time: datetime = None, end_time: datetime | None = None, export: bool = False):
         """
         Collect perpetual futures index price OHLCV data.
         
@@ -601,7 +618,7 @@ class HistoricalDataCollector:
         max_records_per_request = 1000
         all_ohlcv = []
 
-        end_time = datetime.now(timezone.utc)
+        end_time = end_time or datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
         if start_time is None:

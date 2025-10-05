@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-from oms_simulation import BacktesterOMS
+from oms_simulation import OMSClient
 import logging
 import numpy as np
 from pathlib import Path
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.data_manager = HistoricalDataCollector(historical_data_dir)
-        self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
+        self.oms_client = OMSClient(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
         self.portfolio_values = []
         self.returns = []
@@ -67,25 +67,28 @@ class Backtester:
 
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = self.data_manager
         
 
         for sym in base_symbols:
-            if market_type == "spot":
-                dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
-            elif market_type == "futures":
-                # this is data for the backtest loop 
-                dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+            try:
+                if market_type == "spot":
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                elif market_type == "futures":
+                    # this is data for the backtest loop 
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
-                # this is data for price taking estiamtions when the position is opened  and risk management 
-                dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
-            else:
-                raise ValueError(f"Invalid market type: {market_type}")
+                    # this is data for price taking estiamtions when the position is opened  and risk management 
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                else:
+                        raise ValueError(f"Invalid market type: {market_type}")
+            except Exception as e:
+                logger.error(f"Error loading data: {e} for {sym}")
+                continue
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
         for sym in base_symbols:
-            for store in [dm.spot_ohlcv_data, dm.perpetual_mark_ohlcv_data, dm.perpetual_index_ohlcv_data]:
+            for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
                 df = store.get(sym)
                 if df is not None and not df.empty:
                     first = df['timestamp'].min()  # first available candle for this store
@@ -101,6 +104,7 @@ class Backtester:
         # Set the time for data fetching and orders that will be updated as strategy progresses
         self.oms_client.set_current_time(strategy.start_time)
         self.oms_client.set_timestep(time_step)
+        self.oms_client.set_data_manager(self.data_manager)
 
         # Run backtest
         iteration = 0
@@ -121,17 +125,25 @@ class Backtester:
                     summary = self.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
-                orders = strategy.run_strategy(current_time=self.oms_client.current_time, data_manager=self.data_manager)
-                
-                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client)
+                orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
+                print(f"DEBUG data_manager: {self.data_manager.perpetual_index_ohlcv_data.get('APT-USDT-PERP')}")
+                print(f"DEBUG orders: {orders}")
+                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
+                print(f"DEBUG filtered_orders: {filtered_orders}")
 
-                
-                for order in filtered_orders:
-                    try:
-                        self.oms_client.set_target_position(order['symbol'], order['value'], order['side'], order['instrument_type'])
-                    except Exception as e:
-                        logger.error(f"Error setting target position: {e}")
-                        continue
+                if filtered_orders is not None:
+                    for order in filtered_orders:
+                        try:
+                            self.oms_client.set_target_position(
+                                order['symbol'],
+                                order['instrument_type'],
+                                order.get('value', 0.0),
+                                order['side']
+                            )
+                        except Exception as e:
+                            logger.error(f"Error setting target position: {e}")
+                            continue
+
                 # Move to next time step
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 iteration += 1
@@ -154,11 +166,6 @@ class Backtester:
             'final_positions': self.oms_client.get_position()
         }
 
-        # Cleanly close live clients
-        try:
-            self.oms_client.data_manager.close()
-        except Exception:
-            pass
         return results
 
 
@@ -176,27 +183,26 @@ class Backtester:
 
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = self.oms_client.data_manager
-        
+   
         for i in range(permutations+1):
             print(f"permutation {i} of {permutations}")
             if i == 0:
                 for sym in symbols:
                     if market_type == "spot":
-                        dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                        self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
                     elif market_type == "futures":
                         # this is data for the backtest loop 
-                        dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+                        self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
                         # this is data for price taking estiamtions when the position is opened  and risk management 
-                        dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                        self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
                     else:
                         raise ValueError(f"Invalid market type: {market_type}")
 
             # Align start time to earliest available data so prices exist at t0
             earliest_ts = None
             for sym in base_symbols:
-                for store in [dm.spot_ohlcv_data, dm.perpetual_mark_ohlcv_data, dm.perpetual_index_ohlcv_data]:
+                for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
                     df = store.get(sym)
                     if df is not None and not df.empty:
                         first = df['timestamp'].min()  # first available candle for this store
@@ -207,13 +213,13 @@ class Backtester:
 
             if i > 0:
                 for symbol in symbols:
-                    df  = dm.spot_ohlcv_data.get(symbol) 
+                    df  = self.data_manager.spot_ohlcv_data.get(symbol) 
                     if df is not None and not df.empty:
-                        dm.spot_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
+                        self.data_manager.spot_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
 
-                    df  = dm.perpetual_index_ohlcv_data.get(symbol)
+                    df  = self.data_manager.perpetual_index_ohlcv_data.get(symbol)
                     if df is not None and not df.empty:
-                        dm.perpetual_index_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
+                        self.data_manager.perpetual_index_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
 
             # Define start and end times for the strategy
             strategy.start_time = aligned_start
@@ -226,7 +232,7 @@ class Backtester:
                 time_step = timedelta(minutes=15)
 
             self.oms_client.set_timestep(time_step)
-
+            self.oms_client.set_data_manager(self.data_manager)
             # Run backtest
             iteration = 0
 
@@ -267,17 +273,18 @@ class Backtester:
             self.final_positions = []
 
             for sym in symbols:
-                if market_type == "spot":
-                    dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
-                elif market_type == "futures":
-                    # this is data for the backtest loop 
-                    dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+                try:
+                    if market_type == "spot":
+                        self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                    elif market_type == "futures":
+                        # this is data for the backtest loop 
+                        self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
-                    # this is data for price taking estiamtions when the position is opened  and risk management 
-                    dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
-                else:
-                    raise ValueError(f"Invalid market type: {market_type}")
-
+                        # this is data for price taking estiamtions when the position is opened  and risk management 
+                        self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                except Exception as e:
+                    logger.error(f"Error loading data: {e} for {sym}")
+                    continue
 
         print(f"permutation returns: {len(self.permutation_returns)}")
         # After all permutations, compute permutation p-value on Sharpe ratios

@@ -20,7 +20,7 @@ from hist_data import HistoricalDataCollector
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class BacktesterOMS:
+class OMSClient:
     """Order Management System abstraction for backtests.
 
     - Tracks balances and symbol positions
@@ -52,6 +52,10 @@ class BacktesterOMS:
     def set_timestep(self, timestep: timedelta):
         """Set timestep"""
         self.timestep = timestep
+
+    def set_data_manager(self, data_manager: HistoricalDataCollector):
+        """Set data manager"""
+        self.data_manager = data_manager
 
     def _normalize_symbol(self, symbol: str, instrument_type: str) -> str:
         """Map trading symbol to data key used by HistoricalDataManager."""

@@ -4,6 +4,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta, timezone
 from hist_data import HistoricalDataCollector
+from oms_simulation import OMSClient
 # Module-level config setter to pass parameters from the runner script
 _PAIRS_CONFIG: List[Dict] = []
 
@@ -15,13 +16,12 @@ def set_pairs_config(pairs_config: List[Dict]):
 class PairTradingStrategy:
     def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int):
         self.symbols = symbols
-        self.current_time = None
+        self.oms_client = None
+        self.data_manager = None
         self.lookback_days = lookback_days 
         # Build runtime state per pair
         self.pairs = []
         self.historical_data = pd.DataFrame()
-        self.current_time = None
-        self.end_time = None
         self.orders = []
 
         for cfg in _PAIRS_CONFIG:
@@ -47,24 +47,23 @@ class PairTradingStrategy:
         dm = self.data_manager
         # Use existing collector method which returns the past n days, set export to False as we don't want to use saved data over and over again
 
-        # This conditional should reduce the time we spend collecting data as we only collect full forty days at the start and then check if we need to collect more
-        
         # Fetch a rolling window to ensure we have prior days before current day
         window_days = max(self.lookback_days + 2, 3)
-        window_start = self.current_time - pd.Timedelta(days=window_days)
-        end_for_load = self.current_time
+        window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
+        end_for_load = self.oms_client.current_time
+        print(f"DEBUG {self.data_manager._cache_glob('index_ohlcv_futures', base_symbol, '15m')}")
         df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
 
-        df = df[df['timestamp'].between(window_start, self.current_time, inclusive='left')]
+        df = df[df['timestamp'].between(window_start, self.oms_client.current_time, inclusive='left')]
 
         df = df.sort_values('timestamp')
         df = df.set_index('timestamp')
         # Resample to daily closes
-        daily = df['close'].resample('1D').last().dropna()
+        daily = df['close'].resample('1D').last().dropna()  
 
         daily = daily.iloc[-self.lookback_days:]
         # Don't take the last close as it might leak future info about the current day 
-        cutoff = self.current_time - pd.Timedelta(days=1) 
+        cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
         print(f"DEBUG filtered_pre_now days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}, shape:{daily.shape}")
         return daily
@@ -107,14 +106,14 @@ class PairTradingStrategy:
         return beta, float(z), spread_std
 
 
-    def run_strategy(self, current_time: datetime, data_manager: HistoricalDataCollector):
+    def run_strategy(self, oms_client: OMSClient, data_manager: HistoricalDataCollector):
         
         # Track last entry day per pair to enforce one entry per day
         if not hasattr(self, '_last_entry_day'):
             self._last_entry_day = {id(p): None for p in self.pairs}
 
         # Only make entry/exit decisions once per day using daily signals
-        self.current_time = current_time    
+        self.oms_client = oms_client    
         self.data_manager = data_manager
 
         for p in self.pairs:
@@ -138,10 +137,11 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={self.current_time} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
+            print(f"DEBUG decision t={self.oms_client.current_time} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
             if enter:
+                self.orders = []
                 # Enforce one entry per calendar day
-                day_key = (self.current_time.year, self.current_time.month, self.current_time.day)
+                day_key = (self.oms_client.current_time.year, self.oms_client.current_time.month, self.oms_client.current_time.day)
                 if self._last_entry_day.get(id(p)) == day_key:
                     # Already entered today; skip
                     pass
@@ -170,14 +170,18 @@ class PairTradingStrategy:
                         self._last_entry_day[id(p)] = day_key
 
             elif exit_ or stop:
+                self.orders = []
                 # Close both legs
                 self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
                 self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
                 p['is_open'] = False
                 p['current_side'] = None
-                
+            
             else:
+                self.orders = []
                 # Hold
                 continue
+
+            return self.orders
 
 

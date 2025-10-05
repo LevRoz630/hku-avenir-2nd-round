@@ -50,11 +50,11 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days=10)
-    end_date = datetime.now(timezone.utc) - timedelta(hours = 1)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 20)
+    end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=5)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=20)
     results = backtester.run_backtest(
         strategy=strategy,
         symbols=base_symbols,
