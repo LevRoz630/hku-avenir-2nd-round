@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-from src.oms_simulation import BacktesterOMS
+from oms_simulation import BacktesterOMS
 import logging
 import numpy as np
 from pathlib import Path
@@ -16,12 +16,13 @@ class Backtester:
         self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
         self.portfolio_values = []
-        self.period_returns = []
+        self.returns = []
         self.max_drawdown = 0
         self.sharpe_ratio = 0
         self.trade_history = []
         self.final_balance = 0
         self.final_positions = []
+        self.position_manager = PositionManager()
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
@@ -71,10 +72,8 @@ class Backtester:
 
         for sym in base_symbols:
             if market_type == "spot":
-                print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                 dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
             elif market_type == "futures":
-                print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
                 # this is data for the backtest loop 
                 dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
@@ -122,9 +121,11 @@ class Backtester:
                     summary = self.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
-                orders = strategy.run_strategy()
+                orders = strategy.run_strategy(current_time=self.oms_client.current_time, data_manager=self.data_manager)
                 
-                filtered_orders = PositionManager.filter_orders(orders, self.oms_client)
+                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client)
+
+                
                 for order in filtered_orders:
                     try:
                         self.oms_client.set_target_position(order['symbol'], order['value'], order['side'], order['instrument_type'])
@@ -142,8 +143,6 @@ class Backtester:
         
         # Calculate final performance metrics
         self.calculate_performance_metrics()
-        
-        self.returns = self.portfolio_values.diff().dropna()
         # Return results
         results = {
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
@@ -184,10 +183,8 @@ class Backtester:
             if i == 0:
                 for sym in symbols:
                     if market_type == "spot":
-                        print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                         dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
                     elif market_type == "futures":
-                        print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
                         # this is data for the backtest loop 
                         dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
@@ -227,6 +224,7 @@ class Backtester:
             
             if time_step is None:
                 time_step = timedelta(minutes=15)
+
             self.oms_client.set_timestep(time_step)
 
             # Run backtest
@@ -248,7 +246,7 @@ class Backtester:
                         summary = self.oms_client.get_position_summary()
                         logger.info(f"Position Summary: {summary}")
 
-                    strategy.run_strategy()
+                    strategy.run_strategy(current_time=self.oms_client.current_time, data_manager=self.data_manager)
 
                     # Move to next time step
                     self.oms_client.set_current_time(self.oms_client.current_time + time_step)
@@ -262,18 +260,16 @@ class Backtester:
             print(f"permutation {i} of {permutations} complete")
             # Calculate final performance metrics and record this run's returns
             self.calculate_performance_metrics()
-            self.permutation_returns.append(np.array(self.period_returns, dtype=float))
+            self.permutation_returns.append(np.array(self.returns, dtype=float))
             self.portfolio_values = []
-            self.period_returns = []
+            self.returns = []
             self.trade_history = []
             self.final_positions = []
 
             for sym in symbols:
                 if market_type == "spot":
-                    print(f"DEBUG load_data_period sym={sym} data_type=ohlcv_spot, start_date={start_date}, end_date={end_date}")
                     dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
                 elif market_type == "futures":
-                    print(f"DEBUG load_data_period sym={sym} data_type=mark_ohlcv_futures / data_type=index_ohlcv_futures, start_date={start_date}, end_date={end_date}")
                     # this is data for the backtest loop 
                     dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
@@ -314,12 +310,12 @@ class Backtester:
             return
             
         # Calculate period returns (based on time_step granularity)
-        self.period_returns = []
+        self.returns = []
         for i in range(1, len(self.portfolio_values)):
             prev = self.portfolio_values[i-1]
             curr = self.portfolio_values[i]
             if prev > 0:
-                self.period_returns.append((curr - prev) / prev)
+                self.returns.append((curr - prev) / prev)
         
         # Calculate max drawdown
         peak = self.portfolio_values[0]
@@ -332,9 +328,9 @@ class Backtester:
                 self.max_drawdown = drawdown
         
         # Calculate Sharpe ratio (use period returns; assume 24 periods/day for 1h)
-        if self.period_returns:
-            mean_return = np.mean(self.period_returns)
-            std_return = np.std(self.period_returns)
+        if self.returns:
+            mean_return = np.mean(self.returns)
+            std_return = np.std(self.returns)
             if std_return > 0:
                 self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24*4)
     

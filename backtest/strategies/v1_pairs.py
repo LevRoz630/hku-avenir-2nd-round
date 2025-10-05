@@ -16,7 +16,6 @@ class PairTradingStrategy:
     def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int):
         self.symbols = symbols
         self.current_time = None
-        self.data_manager = HistoricalDataCollector(historical_data_dir)
         self.lookback_days = lookback_days 
         # Build runtime state per pair
         self.pairs = []
@@ -54,12 +53,11 @@ class PairTradingStrategy:
         window_days = max(self.lookback_days + 2, 3)
         window_start = self.current_time - pd.Timedelta(days=window_days)
         end_for_load = self.current_time
-        # df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
-        df = dm.perpetual_index_ohlcv_data.get(base_symbol)
+        df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
+
         df = df[df['timestamp'].between(window_start, self.current_time, inclusive='left')]
 
         df = df.sort_values('timestamp')
-        print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
         df = df.set_index('timestamp')
         # Resample to daily closes
         daily = df['close'].resample('1D').last().dropna()
@@ -109,7 +107,7 @@ class PairTradingStrategy:
         return beta, float(z), spread_std
 
 
-    def run_strategy(self, current_time: datetime):
+    def run_strategy(self, current_time: datetime, data_manager: HistoricalDataCollector):
         
         # Track last entry day per pair to enforce one entry per day
         if not hasattr(self, '_last_entry_day'):
@@ -117,6 +115,7 @@ class PairTradingStrategy:
 
         # Only make entry/exit decisions once per day using daily signals
         self.current_time = current_time    
+        self.data_manager = data_manager
 
         for p in self.pairs:
             a_base = p['a_symbol'].replace('-PERP', '')

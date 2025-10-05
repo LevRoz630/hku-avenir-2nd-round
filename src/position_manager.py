@@ -3,7 +3,7 @@ from re import L
 from typing import List, Dict, Any
 import logging
 from datetime import timedelta, timezone, datetime
-from src.hist_data import HistoricalDataCollector
+from hist_data import HistoricalDataCollector
 import numpy as np
 
 logger = logging.getLogger(__name__)
