@@ -12,6 +12,7 @@ import logging
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
+from position_manager import PositionManager
 from backtester import Backtester
 from strategies.v1_pairs import PairTradingStrategy, set_pairs_config
 # from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config
@@ -53,10 +54,12 @@ def main():
     start_date = datetime.now(timezone.utc) - timedelta(days = 20)
     end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
+    position_manager = PositionManager()
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=20)
     results = backtester.run_backtest(
         strategy=strategy,
+        position_manager=position_manager,
         symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,

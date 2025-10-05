@@ -16,18 +16,25 @@ class PositionManager:
 
 
     def filter_orders(self, orders: List[Dict[str, Any]], oms_client: Any, data_manager: HistoricalDataCollector):
+        """
+        Pipeline to validate and weight raw strategy orders before sending to OMS.
+
+        Steps:
+        1) Risk screen via short-horizon volatility; orders over threshold get value=0.
+        2) Size remaining orders using inverse-vol weights under a USDT budget.
+        3) Enforce balance constraint; if sized orders exceed cash, reject the batch.
+
+        Returns a list of enriched order dicts or None if rejected.
+        """
         self.oms_client = oms_client
         self.data_manager = data_manager
         try:
             cleaned_orders = self._close_risky_orders(orders)
             weighted_orders = self._set_weights(cleaned_orders)
-            print(f"DEBUG weighted_orders: {weighted_orders}")
 
             # this checks for the limit of current cash 
             if weighted_orders is not None:
                 values = [x['value'] for x in weighted_orders]
-                print(f"DEBUG values: {values}")
-                print(f"DEBUG oms_client.balance['USDT']: {oms_client.balance['USDT']}")
                 if sum(values) > oms_client.balance['USDT']:
                     logger.error(f"Insufficient USDT balance. Required: {values}, Available: {oms_client.balance['USDT']}")
                     return None
@@ -41,6 +48,13 @@ class PositionManager:
         
 
     def _close_risky_orders(self, orders: List[Dict[str, Any]]):
+        """
+        Mark orders as value=0 when recent realized vol is above a threshold.
+
+        - Uses 4 hours of 15m mark OHLCV to compute scaled volatility
+          (std/mean). Current threshold: 0.1.
+        - Futures data is stored under base symbols; '-PERP' suffix is removed.
+        """
         cleaned: List[Dict[str, Any]] = []
         for order in orders:
             try:
@@ -56,7 +70,6 @@ class PositionManager:
                     cleaned.append(order)
                     continue
                 scaled_vol = float(np.std(data['close']) / np.mean(data['close']))
-                print(f"DEBUG scaled_vol {order['symbol']}: {scaled_vol}")
                 if scaled_vol > 0.1:
                     # Flag as do-not-trade by setting value 0
                     new_order = {**order, 'value': 0}
@@ -71,6 +84,13 @@ class PositionManager:
 
 
     def _set_weights(self, orders: List[Dict[str, Any]]):
+            """
+            Size orders by inverse volatility under a budget cap.
+
+            - Budget: 10% of current USDT balance (conservative sizing).
+            - For each non-zero order, compute 1/scaled_vol over last 1 day of 15m data.
+            - Allocate proportionally to inverse-vol weights.
+            """
             # Work on a copy to avoid mutating the input list unexpectedly
             updated: List[Dict[str, Any]] = []
             limit = self.oms_client.balance['USDT'] / 10

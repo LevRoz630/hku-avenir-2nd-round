@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
+        """High-level backtest runner coordinating data, strategy and OMS.
+
+        Responsibilities:
+        - Ensure historical data availability and push into the collector cache
+        - Iterate the clock, ask strategy for orders, run PositionManager filters
+        - Send sized orders to OMS and track portfolio metrics
+
+        Automatically sets up OMSClient and HistoricalDataCollector.
+        Strategy and PositionManager are passed as an argument to run_backtest ()
+        """
         self.data_manager = HistoricalDataCollector(historical_data_dir)
         self.oms_client = OMSClient(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
@@ -22,13 +32,14 @@ class Backtester:
         self.trade_history = []
         self.final_balance = 0
         self.final_positions = []
-        self.position_manager = PositionManager()
+        self.position_manager = None
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
         
     def run_backtest(self, 
                         strategy: Any,
+                        position_manager: PositionManager,
                         symbols: List[str],
                         start_date: datetime = None,
                         end_date: datetime = None,
@@ -40,11 +51,12 @@ class Backtester:
         - Ensures data exists (downloads if missing)
         - Loads data into memory via HistoricalDataCollector
         - Aligns start_time to first available candle
-        - Iterates time, lets strategy place orders via OMS
+        - Iterates time, lets strategy place orders via OMSClient
         - Aggregates portfolio values and computes metrics
 
         Args:
             strategy: Instantiated strategy object
+            position_manager: Instantiated position manager object
             symbols: Symbols to backtest (supports -PERP for perps)
             start_date: Start datetime (aligned to first data if earlier)
             end_date: End datetime
@@ -53,7 +65,7 @@ class Backtester:
         Returns:
             Results dict with PnL series and summary metrics
         """
-        
+        self.position_manager = position_manager
 
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
@@ -126,10 +138,7 @@ class Backtester:
                     logger.info(f"Position Summary: {summary}")
 
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
-                print(f"DEBUG data_manager: {self.data_manager.perpetual_index_ohlcv_data.get('APT-USDT-PERP')}")
-                print(f"DEBUG orders: {orders}")
                 filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
-                print(f"DEBUG filtered_orders: {filtered_orders}")
 
                 if filtered_orders is not None:
                     for order in filtered_orders:
@@ -172,7 +181,7 @@ class Backtester:
 
     def run_permutation_backtest(self, strategy: Any, symbols: List[str], start_date: datetime = None, end_date: datetime = None, time_step: timedelta = None, market_type: str = None, permutations: int = 100):
         """
-        Run a backtest for a given strategy and symbols with different permutations of the symbols
+        TO BE FINISHED
         """
         
         # Ensure historical data exists for requested symbols; download if missing
@@ -185,7 +194,7 @@ class Backtester:
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
    
         for i in range(permutations+1):
-            print(f"permutation {i} of {permutations}")
+            logger.info(f"permutation {i} of {permutations}")
             if i == 0:
                 for sym in symbols:
                     if market_type == "spot":
@@ -227,12 +236,13 @@ class Backtester:
 
             # Set the time for data fetching and orders that will be updated as strategy progresses
             self.oms_client.set_current_time(strategy.start_time)
-            
+            self.oms_client.set_timestep(time_step)
+            self.oms_client.set_data_manager(self.data_manager)
+
+                        
             if time_step is None:
                 time_step = timedelta(minutes=15)
 
-            self.oms_client.set_timestep(time_step)
-            self.oms_client.set_data_manager(self.data_manager)
             # Run backtest
             iteration = 0
 
