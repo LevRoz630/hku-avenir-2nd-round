@@ -2,7 +2,8 @@ from typing import List, Any, Dict
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from oms_simulation import BacktesterOMS
+from datetime import datetime, timedelta, timezone
+from hist_data import HistoricalDataCollector
 # Module-level config setter to pass parameters from the runner script
 _PAIRS_CONFIG: List[Dict] = []
 
@@ -14,13 +15,15 @@ def set_pairs_config(pairs_config: List[Dict]):
 class PairTradingStrategy:
     def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int):
         self.symbols = symbols
-        self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
+        self.current_time = None
+        self.data_manager = HistoricalDataCollector(historical_data_dir)
         self.lookback_days = lookback_days 
         # Build runtime state per pair
         self.pairs = []
         self.historical_data = pd.DataFrame()
         self.current_time = None
         self.end_time = None
+        self.orders = []
 
         for cfg in _PAIRS_CONFIG:
             base_a, base_b = cfg['legs']
@@ -42,18 +45,18 @@ class PairTradingStrategy:
 
         Falls back to resampling 15m/1h data to daily closes if 1d is not present.
         """
-        dm = self.oms_client.data_manager
+        dm = self.data_manager
         # Use existing collector method which returns the past n days, set export to False as we don't want to use saved data over and over again
 
         # This conditional should reduce the time we spend collecting data as we only collect full forty days at the start and then check if we need to collect more
         
         # Fetch a rolling window to ensure we have prior days before current day
         window_days = max(self.lookback_days + 2, 3)
-        window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
-        end_for_load = self.oms_client.current_time
+        window_start = self.current_time - pd.Timedelta(days=window_days)
+        end_for_load = self.current_time
         # df = dm.load_data_period(base_symbol, timeframe='15m', data_type='index_ohlcv_futures', start_date=window_start, end_date=end_for_load)
         df = dm.perpetual_index_ohlcv_data.get(base_symbol)
-        df = df[df['timestamp'].between(window_start, self.oms_client.current_time, inclusive='left')]
+        df = df[df['timestamp'].between(window_start, self.current_time, inclusive='left')]
 
         df = df.sort_values('timestamp')
         print(f"DEBUG raw_loaded base={base_symbol} rows={len(df)} ts_range=({df['timestamp'].min()} -> {df['timestamp'].max()})")
@@ -63,7 +66,7 @@ class PairTradingStrategy:
 
         daily = daily.iloc[-self.lookback_days:]
         # Don't take the last close as it might leak future info about the current day 
-        cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
+        cutoff = self.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
         print(f"DEBUG filtered_pre_now days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}, shape:{daily.shape}")
         return daily
@@ -106,23 +109,14 @@ class PairTradingStrategy:
         return beta, float(z), spread_std
 
 
-    def run_strategy(self):
-        # Portfolio value for sizing
-        total_equity = float(self.oms_client.get_total_portfolio_value() or 0.0)
-        print(f"DEBUG run now={self.oms_client.current_time} total_equity={total_equity}")
-
-        # Enforce 90% allocation cap across all open pairs
-        max_alloc_total = 0.1 * total_equity
-        # Estimate current deployed margin notionally as sum of per-leg USDT allocations kept in state
-        # We will track per-pair intended alloc to cap new entries
-        if not hasattr(self, '_alloc_state'):
-            self._alloc_state = {id(p): 0.0 for p in self.pairs}
+    def run_strategy(self, current_time: datetime):
+        
         # Track last entry day per pair to enforce one entry per day
         if not hasattr(self, '_last_entry_day'):
             self._last_entry_day = {id(p): None for p in self.pairs}
 
         # Only make entry/exit decisions once per day using daily signals
-        now = self.oms_client.current_time
+        self.current_time = current_time    
 
         for p in self.pairs:
             a_base = p['a_symbol'].replace('-PERP', '')
@@ -145,62 +139,43 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={now} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
+            print(f"DEBUG decision t={self.current_time} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
             if enter:
                 # Enforce one entry per calendar day
-                day_key = (now.year, now.month, now.day)
+                day_key = (self.current_time.year, self.current_time.month, self.current_time.day)
                 if self._last_entry_day.get(id(p)) == day_key:
                     # Already entered today; skip
                     pass
                 else:
-                    # Dollar allocation per pair (total across both legs)
-                    alloc_cap = max(0.0, min(1.0, p['max_alloc_frac']))  * max_alloc_total * 5
-                    # Scale with z-score up to 2x at z >= 2*entry
-                    scale = min(abs(z) / max(p['entry_z'], 1e-6), 2.0)
-                    total_pair_usdt = alloc_cap * scale
-                    # Beta-weighted split: A gets 1, B gets |beta|
-                    w_a = 1.0
-                    w_b = abs(beta)
-                    denom = max(w_a + w_b, 1e-8)
-                    a_usdt = total_pair_usdt * (w_a / denom)
-                    b_usdt = total_pair_usdt * (w_b / denom)
+                  
+                    if z > 0:
+                        if p['current_side'] == 'long_spread':
+                            self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
 
-                    # Check portfolio cap before opening
-                    current_deployed = sum(self._alloc_state.values())
-                    print(f"DEBUG alloc_check deployed={current_deployed} add={total_pair_usdt} cap={max_alloc_total}")
-
-                    if current_deployed + total_pair_usdt <= max_alloc_total*5:
-                        if z > 0:
-                            if p['current_side'] == 'long_spread':
-                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
-
-                            # Short A, Long B * beta
-                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'SHORT')
-                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'LONG')
-                            p['current_side'] = 'short_spread'
-                        else:
-                            if p['current_side'] == 'short_spread':
-                                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
-                            
-                            # Long A, Short B * beta
-                            self.oms_client.set_target_position(a_sym, instrument_type, a_usdt, 'LONG')
-                            self.oms_client.set_target_position(b_sym, instrument_type, b_usdt, 'SHORT')
-                            p['current_side'] = 'long_spread'
+                        # Short A, Long B * beta
+                        self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
+                        self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
+                        p['current_side'] = 'short_spread'
+                    else:
+                        if p['current_side'] == 'short_spread':
+                            self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                        
+                        # Long A, Short B * beta
+                        self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
+                        self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
+                        p['current_side'] = 'long_spread'
 
                         p['is_open'] = True
-                        self._alloc_state[id(p)] = total_pair_usdt
                         self._last_entry_day[id(p)] = day_key
-                        print(f"DEBUG opened side={p['current_side']} a_sym={a_sym} b_sym={b_sym} total_alloc={total_pair_usdt}")
 
             elif exit_ or stop:
                 # Close both legs
-                self.oms_client.set_target_position(a_sym, instrument_type, 0.0, 'CLOSE')
-                self.oms_client.set_target_position(b_sym, instrument_type, 0.0, 'CLOSE')
+                self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
                 p['is_open'] = False
                 p['current_side'] = None
-                self._alloc_state[id(p)] = 0.0
                 
             else:
                 # Hold

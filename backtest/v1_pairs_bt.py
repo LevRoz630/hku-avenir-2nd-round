@@ -5,7 +5,7 @@ Run pairs trading strategy using the backtester over the last ~90 days.
 
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Add current dir (for local strategies) and src (engine)
@@ -50,8 +50,8 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now() - timedelta(days=40)
-    end_date = datetime.now()
+    start_date = datetime.now(timezone.utc) - timedelta(days=40)
+    end_date = datetime.now(timezone.utc)
 
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)

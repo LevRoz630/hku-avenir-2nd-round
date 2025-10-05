@@ -7,7 +7,7 @@ Example: Run HODL strategy using the backtester.
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pandas as pd
 import logging
@@ -42,8 +42,8 @@ async def main():
 
     results = await backtester.run_backtest(strategy_class=HoldStrategy, 
     symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
-    start_date=datetime.now() - timedelta(days = 1), 
-    end_date=datetime.now(), time_step=timedelta(hours=1))
+    start_date=datetime.now(timezone.utc) - timedelta(days = 1), 
+    end_date=datetime.now(timezone.utc), time_step=timedelta(hours=1))
 
     
     await backtester.print_results(results)

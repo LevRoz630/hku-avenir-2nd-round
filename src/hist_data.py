@@ -511,7 +511,7 @@ class HistoricalDataCollector:
         filename = f"perpetual_{symbol.replace('-', '_')}_mark_{timeframe}_{start_str}_{end_str}.parquet"
         logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with mark price parameter
         all_ohlcv = self._loop_data_collection(
@@ -595,7 +595,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with index price parameter
         all_ohlcv = self._loop_data_collection(
@@ -673,7 +673,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting funding rates for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         since = int(start_time.timestamp() * 1000)
         
         try:
@@ -774,7 +774,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting open interest for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method
         all_open_interest = self._loop_data_collection(
@@ -861,7 +861,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual trades for {symbol}...")
 
-        ccxt_symbol = self._convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         all_trades = []
         current_start_time = start_time
         

@@ -1,16 +1,19 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-from oms_simulation import BacktesterOMS
+from src.oms_simulation import BacktesterOMS
 import logging
 import numpy as np
 from pathlib import Path
 from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
+from position_manager import PositionManager
 
 logger = logging.getLogger(__name__)
 
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
+        self.data_manager = HistoricalDataCollector(historical_data_dir)
+        self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
         self.portfolio_values = []
         self.period_returns = []
@@ -55,11 +58,15 @@ class Backtester:
         data_path = Path(self.historical_data_dir)
         base_symbols = [s.replace('-PERP', '') for s in symbols]
         data_path.mkdir(parents=True, exist_ok=True)
+
+        if time_step is None:
+            raise ValueError("Time step is required")
+
         desired_timeframe = self._time_step_to_timeframe(time_step)
 
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = strategy.oms_client.data_manager
+        dm = self.data_manager
         
 
         for sym in base_symbols:
@@ -93,40 +100,44 @@ class Backtester:
         strategy.end_time = end_date
 
         # Set the time for data fetching and orders that will be updated as strategy progresses
-        strategy.oms_client.set_current_time(strategy.start_time)
-        
-        if time_step is None:
-            time_step = timedelta(minutes=15)
-        strategy.oms_client.set_timestep(time_step)
+        self.oms_client.set_current_time(strategy.start_time)
+        self.oms_client.set_timestep(time_step)
 
         # Run backtest
         iteration = 0
 
-        while strategy.oms_client.current_time <= end_date:
+        while self.oms_client.current_time <= end_date:
             try:
                 # Revalue portfolio at the current timestamp
-                total_value = strategy.oms_client.get_total_portfolio_value()
+                total_value = self.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
                 try:
-                    positions_tbl = format_positions_table(strategy.oms_client.get_position())
+                    positions_tbl = format_positions_table(self.oms_client.get_position())
                     logger.info("\nPositions:\n" + positions_tbl)
 
                 except Exception as _e:
                     # Fallback to raw summary on any formatting error
-                    summary = strategy.oms_client.get_position_summary()
+                    summary = self.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
-                strategy.run_strategy()
-
+                orders = strategy.run_strategy()
+                
+                filtered_orders = PositionManager.filter_orders(orders, self.oms_client)
+                for order in filtered_orders:
+                    try:
+                        self.oms_client.set_target_position(order['symbol'], order['value'], order['side'], order['instrument_type'])
+                    except Exception as e:
+                        logger.error(f"Error setting target position: {e}")
+                        continue
                 # Move to next time step
-                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 iteration += 1
                     
             except Exception as e:
                 logger.error(f"Error in backtest iteration {iteration}: {e}")
-                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 continue
         
         # Calculate final performance metrics
@@ -139,14 +150,14 @@ class Backtester:
             'returns': self.returns,
             'max_drawdown': self.max_drawdown,
             'sharpe_ratio': self.sharpe_ratio,
-            'trade_history': strategy.oms_client.trade_history,
-            'final_balance': strategy.oms_client.get_account_balance(),
-            'final_positions': strategy.oms_client.get_position()
+            'trade_history': self.oms_client.trade_history,
+            'final_balance': self.oms_client.balance,
+            'final_positions': self.oms_client.get_position()
         }
 
         # Cleanly close live clients
         try:
-            strategy.oms_client.data_manager.close()
+            self.oms_client.data_manager.close()
         except Exception:
             pass
         return results
@@ -166,7 +177,7 @@ class Backtester:
 
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = strategy.oms_client.data_manager
+        dm = self.oms_client.data_manager
         
         for i in range(permutations+1):
             print(f"permutation {i} of {permutations}")
@@ -212,40 +223,40 @@ class Backtester:
             strategy.end_time = end_date
 
             # Set the time for data fetching and orders that will be updated as strategy progresses
-            strategy.oms_client.set_current_time(strategy.start_time)
+            self.oms_client.set_current_time(strategy.start_time)
             
             if time_step is None:
                 time_step = timedelta(minutes=15)
-            strategy.oms_client.set_timestep(time_step)
+            self.oms_client.set_timestep(time_step)
 
             # Run backtest
             iteration = 0
 
-            while strategy.oms_client.current_time <= end_date:
+            while self.oms_client.current_time <= end_date:
                 try:
                     # Revalue portfolio at the current timestamp
-                    total_value = strategy.oms_client.get_total_portfolio_value()
+                    total_value = self.oms_client.get_total_portfolio_value()
                     self.portfolio_values.append(total_value)
                     logger.info(f"Total Portfolio Value: {total_value}")
                     # Pretty-print balances and positions
                     try:
-                        positions_tbl = format_positions_table(strategy.oms_client.get_position())
+                        positions_tbl = format_positions_table(self.oms_client.get_position())
                         logger.info("\nPositions:\n" + positions_tbl)
 
                     except Exception as _e:
                         # Fallback to raw summary on any formatting error
-                        summary = strategy.oms_client.get_position_summary()
+                        summary = self.oms_client.get_position_summary()
                         logger.info(f"Position Summary: {summary}")
 
                     strategy.run_strategy()
 
                     # Move to next time step
-                    strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                     iteration += 1
                         
                 except Exception as e:
                     logger.error(f"Error in backtest iteration {iteration}: {e}")
-                    strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                     continue
             
             print(f"permutation {i} of {permutations} complete")

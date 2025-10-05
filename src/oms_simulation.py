@@ -59,14 +59,6 @@ class BacktesterOMS:
         if instrument_type == "future":
             return symbol.replace('-PERP', '')
         return symbol
-        
-    def get_balance(self) -> List[Dict[str, Any]]:
-        """Get account balance - compatible with OMS interface"""
-        return [{"asset": asset, "balance": str(balance)} for asset, balance in self.balance.items()]
-    
-    def get_account_balance(self) -> Dict[str, float]:
-        """Get account balance as dictionary - compatible with strategy interface"""
-        return {asset: float(balance) for asset, balance in self.balance.items()}
     
     def get_position(self) -> List[Dict[str, Any]]:
         """Return current non-zero positions with live valuation and PnL."""

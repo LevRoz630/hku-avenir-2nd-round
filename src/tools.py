@@ -88,12 +88,12 @@ def _get_number_of_periods(timeframe: str, start_time: datetime, end_time: datet
     int
         Number of periods between start_time and end_time
     """
-    minutes = get_timeframe_to_minutes(timeframe)
+    minutes = _get_timeframe_to_minutes(timeframe)
     total_minutes = (end_time - start_time).total_seconds() / 60
     total_periods = int(total_minutes // minutes)
     return total_periods
 
-def get_timeframe_to_minutes( timeframe: str):
+def _get_timeframe_to_minutes( timeframe: str):
     """
     Convert timeframe string to minutes.
     
