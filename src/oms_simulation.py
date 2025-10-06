@@ -34,20 +34,15 @@ class OMSClient:
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
         self.balance = {"USDT": 10000.0}  # Balance for trading
         self.trade_history = []  # All trades executed
-        self.performance_metrics = {}
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
-        # Simple per-timestamp price cache: { (symbol, instrument_type): price }
-        self._price_cache_time: Optional[datetime] = None
-        self._price_cache: Dict[Tuple[str, str], float] = {}
+
         self.timestep = None
         
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
-        # Invalidate per-timestep price cache whenever the clock advances
-        self._price_cache_time = current_time
-        self._price_cache.clear()
+
 
     def set_timestep(self, timestep: timedelta):
         """Set timestep"""
@@ -113,8 +108,7 @@ class OMSClient:
 
         # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
-        is_futures = instrument_type == 'future'
-        if not is_futures and trade_value > self.balance['USDT']:
+        if trade_value > self.balance['USDT']:
             raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
 
         # Convert USDT → base-asset quantity at current mark/index price
@@ -151,8 +145,7 @@ class OMSClient:
 
         elif position_side == current_side:
             # Add to an existing position on the same side, update VWAP entry_price
-            if not is_futures:
-                self.balance['USDT'] -= trade_value
+            self.balance['USDT'] -= trade_value
             new_qty = current_quantity + trade_qty
             pos['quantity'] = new_qty
             pos['value'] = abs(new_qty) * current_price
@@ -166,8 +159,7 @@ class OMSClient:
             pnl = self.pnl_close_position(symbol, instrument_type)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.balance['USDT'] += (pnl or 0.0)
-            if not is_futures:
-                self.balance['USDT'] -= trade_value
+            self.balance['USDT'] -= trade_value
             pos['quantity'] = trade_qty
             pos['value'] = abs(trade_qty) * current_price
             pos['side'] = position_side
@@ -178,7 +170,7 @@ class OMSClient:
        
         # Persist an immutable record of the action with post-trade state
         self.trade_history.append({
-            'timestamp': self.current_time or datetime.now(),
+            'timestamp': self.current_time,
             'symbol': symbol,
             'type': instrument_type,
             'side': self.positions[symbol]['side'],
@@ -192,7 +184,7 @@ class OMSClient:
     
     def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
         """Get current price for a symbol 
-        Will use cache if availble to srouce the price that is a bit ahead of the current price.
+        Will use cache if availble to source the price that is a bit ahead of the current price.
         This is done for the sake of order being executed after and not before the decision.
         Was tested on hourly data, not 15 minutes or less so behaviour there is less known and might lead to underestimation of the pnl
         """
@@ -214,7 +206,8 @@ class OMSClient:
                 df = df.copy()
                 df['timestamp'] = pd.to_datetime(ts, errors='coerce')
             # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
-            df_now = df[df['timestamp'] <= (self.current_time + timedelta(minutes = 15))]
+            time_step_diff = df['timestamp'].diff().min()
+            df_now = df[df['timestamp'] <= (self.current_time + time_step_diff)]
 
             if df_now.empty:
                 return None

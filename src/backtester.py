@@ -7,6 +7,8 @@ from pathlib import Path
 from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
 from position_manager import PositionManager
+import matplotlib.pyplot as plt
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,6 @@ class Backtester:
     def run_backtest(self, 
                         strategy: Any,
                         position_manager: PositionManager,
-                        symbols: List[str],
                         start_date: datetime = None,
                         end_date: datetime = None,
                         time_step: timedelta = None,
@@ -65,21 +66,24 @@ class Backtester:
         Returns:
             Results dict with PnL series and summary metrics
         """
-        self.position_manager = position_manager
+        try:
+            self.position_manager = position_manager
+            symbols = strategy.symbols
+            # Ensure historical data exists for requested symbols; download if missing
+            data_path = Path(self.historical_data_dir)
+            base_symbols = [s.replace('-PERP', '') for s in symbols]
+            data_path.mkdir(parents=True, exist_ok=True)
 
-        # Ensure historical data exists for requested symbols; download if missing
-        data_path = Path(self.historical_data_dir)
-        base_symbols = [s.replace('-PERP', '') for s in symbols]
-        data_path.mkdir(parents=True, exist_ok=True)
+            if time_step is None:
+                raise ValueError("Time step is required")
 
-        if time_step is None:
-            raise ValueError("Time step is required")
-
-        desired_timeframe = self._time_step_to_timeframe(time_step)
+            desired_timeframe = self._time_step_to_timeframe(time_step)
 
 
-        data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        
+            data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
+        except Exception as e:
+            logger.error(f"Error in run_backtest: {e}")
+            return None
 
         for sym in base_symbols:
             try:
@@ -349,8 +353,21 @@ class Backtester:
             mean_return = np.mean(self.returns)
             std_return = np.std(self.returns)
             if std_return > 0:
-                self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24*4)
+                self.sharpe_ratio = mean_return / std_return
     
+    def plot_results(self, results: Dict[str, Any]):
+        """Plot backtest results"""
+        plt.plot(self.portfolio_values)
+        plt.title("Portfolio Value")
+        plt.xlabel("Time")
+        plt.ylabel("Portfolio Value")
+        plt.grid(True)
+        plt.show()
+
+    def save_results(self, results: Dict[str, Any], filename: str):
+        """Save backtest results"""
+        with open(filename+".json", "w") as f:
+            json.dump(results, f)
 
     def print_results(self, results: Dict[str, Any]):
         """Print backtest results in a formatted way"""

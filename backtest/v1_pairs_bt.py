@@ -51,16 +51,15 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days = 20)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 100)
     end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
     position_manager = PositionManager()
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=20)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)
     results = backtester.run_backtest(
         strategy=strategy,
         position_manager=position_manager,
-        symbols=base_symbols,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(days = 1),
@@ -68,6 +67,8 @@ def main():
     )
     backtester.print_results(results)
     # backtester.print_results(results)
+    backtester.save_results(results, "v1_pairs_bt")
+    backtester.plot_results(results)
 
 if __name__ == "__main__":
     main()
