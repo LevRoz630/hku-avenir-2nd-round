@@ -29,18 +29,23 @@ class PositionManager:
         self.oms_client = oms_client
         self.data_manager = data_manager
         try:
-            cleaned_orders = self._close_risky_orders(orders)
-            weighted_orders = self._set_weights(cleaned_orders)
+            # Separate CLOSE orders to bypass sizing/budget gating
+            close_orders = [o for o in orders if o.get('side') == 'CLOSE']
+            open_orders = [o for o in orders if o.get('side') != 'CLOSE']
 
-            # this checks for the limit of current cash 
-            if weighted_orders is not None:
-                values = [x['value'] for x in weighted_orders]
+            cleaned_open = self._close_risky_orders(open_orders)
+            weighted_open = self._set_weights(cleaned_open)
+
+            # Enforce balance constraint only on opens
+            if weighted_open is not None:
+                values = [x.get('value', 0.0) for x in weighted_open]
                 if sum(values) > oms_client.balance['USDT']:
                     logger.error(f"Insufficient USDT balance. Required: {values}, Available: {oms_client.balance['USDT']}")
-                    return None
-                return weighted_orders
+                    return close_orders if close_orders else None
+                return close_orders + weighted_open
 
-            return None
+            # If no open orders after filtering, return CLOSE orders if any
+            return close_orders if close_orders else None
 
         except Exception as e:
             logger.error(f"Error filtering orders: {e}")

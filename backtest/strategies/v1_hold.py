@@ -19,12 +19,9 @@ class HoldStrategy:
         if not self.has_bought:
             # Allocate all USDT equally to all symbols (assume all are spot or perpetual)
             usdt = self.oms_client.balance['USDT']
-            print(f"debug usdt:{usdt}")
             if usdt > 0:
-
                 for symbol in self.symbols:
                     # Determine instrument type
-                    print(f"debug symbol:{symbol}")
                     self.orders.append({
                         "symbol": symbol,
                         "instrument_type": "future",

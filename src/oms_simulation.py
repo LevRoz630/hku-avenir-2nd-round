@@ -70,7 +70,12 @@ class OMSClient:
                 current_price = self.get_current_price(symbol, instrument_type)
                 if current_price:
                     current_value = abs(pos['quantity']) * current_price
-                    pnl = pos['quantity'] * (current_price - pos['entry_price'])
+                    # Side-aware PnL for display
+                    pnl = (
+                        pos['quantity'] * (current_price - pos['entry_price'])
+                        if pos.get('side') == 'LONG' else
+                        pos['quantity'] * (pos['entry_price'] - current_price)
+                    )
                     
                     positions.append({
                         'symbol': symbol,
@@ -128,11 +133,17 @@ class OMSClient:
         current_side = pos.get('side', 'LONG')
         current_entry_price = float(pos.get('entry_price', 0.0))
 
+        # Futures vs spot cash semantics
+        is_future = (instrument_type == 'future')
+
         # Handle explicit close before side comparisons to avoid misrouting CLOSE
         if position_side == 'CLOSE':
             # Explicit close: realize PnL and zero out the position
-            pnl = self.pnl_close_position(symbol, instrument_type)
+            pnl, principal = self.close_position(symbol, instrument_type)
             self.balance['USDT'] += (pnl or 0.0)
+            # Only restore principal for spot; futures do not move principal
+            if not is_future:
+                self.balance['USDT'] += (principal or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
                 'quantity': 0.0,
@@ -145,26 +156,37 @@ class OMSClient:
 
         elif position_side == current_side:
             # Add to an existing position on the same side, update VWAP entry_price
-            self.balance['USDT'] -= trade_value
+            # For futures, do not subtract principal from cash
+            if not is_future:
+                self.balance['USDT'] -= trade_value
             new_qty = current_quantity + trade_qty
-            pos['quantity'] = new_qty
-            pos['value'] = abs(new_qty) * current_price
-            pos['entry_price'] = (
-                (current_entry_price * current_quantity + current_price * trade_qty) / new_qty
-            ) if new_qty else current_price
-            pos['side'] = position_side
+            self.positions[symbol] = {
+                'quantity': new_qty,
+                'value': abs(new_qty) * current_price,
+                'side': position_side,
+                'entry_price': (
+                    (current_entry_price * current_quantity + current_price * trade_qty) / new_qty
+                ) if new_qty else current_price,
+                'pnl': pos.get('pnl', 0.0),
+                'instrument_type': instrument_type,
+            }
 
         elif position_side != current_side:
             # Flip side: realize PnL on the old side, then open a fresh position
-            pnl = self.pnl_close_position(symbol, instrument_type)
-            pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
+            pnl, principal = self.close_position(symbol, instrument_type)
             self.balance['USDT'] += (pnl or 0.0)
-            self.balance['USDT'] -= trade_value
-            pos['quantity'] = trade_qty
-            pos['value'] = abs(trade_qty) * current_price
-            pos['side'] = position_side
-            pos['entry_price'] = current_price
-            pos['instrument_type'] = instrument_type
+            # Only restore and re-spend principal for spot
+            if not is_future:
+                self.balance['USDT'] += (principal or 0.0)
+                self.balance['USDT'] -= trade_value
+            self.positions[symbol] = {
+                'quantity': trade_qty,
+                'value': abs(trade_qty) * current_price,
+                'side': position_side,
+                'entry_price': current_price,
+                'pnl': pos.get('pnl', 0.0) + (pnl or 0.0),
+                'instrument_type': instrument_type,
+            }
         else:
             raise ValueError(f"Invalid position side: {position_side}")
        
@@ -218,18 +240,20 @@ class OMSClient:
         
         return None
     
-    def pnl_close_position(self, symbol: str, instrument_type: str):
+    def close_position(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""
         current_price = self.get_current_price(symbol, instrument_type)
         pos = self.positions[symbol]
         pnl = 0.0
+        principal = 0.0
         if current_price and pos['quantity'] != 0:
             if pos['side'] == 'LONG':
                 pnl = pos['quantity'] * (current_price - pos['entry_price']) - 0.00023* pos['quantity'] * pos['entry_price']
             elif pos['side'] == 'SHORT':
                 pnl = pos['quantity'] * (pos['entry_price'] - current_price) - 0.00023* pos['quantity'] * pos['entry_price']
             pos['value'] = abs(pos['quantity']) * current_price
-        return pnl
+            principal = pos['quantity'] * pos['entry_price']
+        return pnl, principal
 
 
     def get_total_portfolio_value(self) -> float:

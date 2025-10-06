@@ -64,7 +64,6 @@ class PairTradingStrategy:
         # Don't take the last close as it might leak future info about the current day 
         cutoff = self.oms_client.current_time - pd.Timedelta(days=1) 
         daily = daily[daily.index < cutoff]
-        print(f"DEBUG filtered_pre_now days={len(daily)} last_idx={daily.index.max()} cutoff={cutoff}, shape:{daily.shape}")
         return daily
 
     def _compute_beta_and_z(self, a_base: str, b_base: str):
@@ -77,13 +76,10 @@ class PairTradingStrategy:
 
         a_series = self._get_daily_closes(a_base)
         b_series = self._get_daily_closes(b_base)
-        print(f"debug a series shape{a_series.shape} b series shape{b_series.shape}")
         if a_series.empty or b_series.empty:
-            print(f"DEBUG series_empty a_len={len(a_series)} b_len={len(b_series)}")
             return None, None, None
         # Align on common dates
         df = pd.concat([a_series.rename('a'), b_series.rename('b')], axis=1).dropna()
-        print(f"DEBUG aligned_len={len(df)} a_range=({a_series.index.min()} -> {a_series.index.max()}) b_range=({b_series.index.min()} -> {b_series.index.max()})")
         # Use last (lookback + 1) daily points; last one is "current" bar
         window = df.iloc[-(self.lookback_days + 1):]
         hist = window.iloc[:-1]
@@ -101,7 +97,6 @@ class PairTradingStrategy:
             return beta, 0.0, 0.0
         current_spread = float(curr['a'] - beta * curr['b'])
         z = (current_spread - spread_mean) / spread_std
-        print(f"DEBUG beta_z a={a_base} b={b_base} beta={beta:.4f} z={float(z):.3f} std={spread_std:.6f}")
         return beta, float(z), spread_std
 
 
@@ -115,14 +110,13 @@ class PairTradingStrategy:
         self.oms_client = oms_client    
         self.data_manager = data_manager
 
+        all_orders: List[Dict] = []
         for p in self.pairs:
             a_base = p['a_symbol'].replace('-PERP', '')
             b_base = p['b_symbol'].replace('-PERP', '')
 
-            print(f"DEBUG compute_params pair=({a_base},{b_base}) lookback={self.lookback_days}")
             beta, z, std = self._compute_beta_and_z(a_base, b_base)
             if beta is None:
-                print(f"DEBUG skip_pair reason=no_beta_z pair=({a_base},{b_base})")
                 continue
             p['last_beta'] = beta
 
@@ -136,9 +130,8 @@ class PairTradingStrategy:
             exit_ = abs(z) < p['exit_z'] and p['is_open']
             stop = abs(z) > (3.0 * p['entry_z']) and p['is_open']
 
-            print(f"DEBUG decision t={self.oms_client.current_time} pair=({a_base},{b_base}) z={z} enter={abs(z) > p['entry_z']} exit={abs(z) < p['exit_z'] and p['is_open']} stop={abs(z) > (3.0 * p['entry_z'])}")
             if enter:
-                self.orders = []
+                orders: List[Dict] = []
                 # Enforce one entry per calendar day
                 day_key = (self.oms_client.current_time.year, self.oms_client.current_time.month, self.oms_client.current_time.day)
                 if self._last_entry_day.get(id(p)) == day_key:
@@ -148,39 +141,43 @@ class PairTradingStrategy:
                   
                     if z > 0:
                         if p['current_side'] == 'long_spread':
-                            self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                            self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
 
                         # Short A, Long B * beta
-                        self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
-                        self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
+                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
+                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
                         p['current_side'] = 'short_spread'
+                        p['is_open'] = True
+                        self._last_entry_day[id(p)] = day_key
                     else:
                         if p['current_side'] == 'short_spread':
-                            self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                            self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
                         
                         # Long A, Short B * beta
-                        self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
-                        self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
+                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
+                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
                         p['current_side'] = 'long_spread'
 
                         p['is_open'] = True
                         self._last_entry_day[id(p)] = day_key
+                all_orders.extend(orders)
 
             elif exit_ or stop:
-                self.orders = []
+                orders = []
                 # Close both legs
-                self.orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                self.orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
                 p['is_open'] = False
                 p['current_side'] = None
+                all_orders.extend(orders)
             
             else:
-                self.orders = []
+                # Hold - no orders for this pair
                 # Hold
                 continue
 
-            return self.orders
+        return all_orders
 
 
