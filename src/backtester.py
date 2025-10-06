@@ -228,43 +228,39 @@ class Backtester:
         # Snapshot original dataframes to ensure i=0 uses exact originals and each
         # permutation shuffles independently from the same baseline
         orig_spot = {}
-        orig_index = {}
-        orig_mark = {}
+        orig_index_future = {}
+        orig_mark_future = {}
+
         for sym in base_symbols:
-            df = self.data_manager.spot_ohlcv_data.get(sym)
-            if df is not None and not df.empty:
-                orig_spot[sym] = df.copy(deep=True)
-            dfi = self.data_manager.perpetual_index_ohlcv_data.get(sym)
-            if dfi is not None and not dfi.empty:
-                orig_index[sym] = dfi.copy(deep=True)
-            dfm = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
-            if dfm is not None and not dfm.empty:
-                orig_mark[sym] = dfm.copy(deep=True)
+            if market_type == "spot":
+                orig_spot[sym] = self.data_manager.spot_ohlcv_data.get(sym)
+            elif market_type == "futures":
+                orig_index_future[sym] = self.data_manager.perpetual_index_ohlcv_data.get(sym)
+                orig_mark_future[sym] = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
+            else:
+                raise ValueError(f"Invalid market type: {market_type}")
+
 
         observed_results: Dict[str, Any] = None
 
         for i in range(permutations + 1):
             logger.info(f"permutation {i} of {permutations}")
 
-            # Shuffle data for permutation runs (i > 0)
-            # Always restore originals first to avoid cumulative shuffles
-            for sym in base_symbols:
-                if sym in orig_spot:
-                    self.data_manager.spot_ohlcv_data[sym] = orig_spot[sym].copy(deep=True)
-                if sym in orig_index:
-                    self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index[sym].copy(deep=True)
-                if sym in orig_mark:
-                    self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark[sym].copy(deep=True)
-
             if i > 0:
                 for sym in base_symbols:
+                    # reshuffle again and then restore the timestamp to only change the targets
                     if market_type == "spot" and sym in orig_spot:
                         self.data_manager.spot_ohlcv_data[sym] = orig_spot[sym].sample(frac=1, random_state=i).reset_index(drop=True)
+                        self.data_manager.spot_ohlcv_data[sym][self.data_manager.spot_ohlcv_data[sym]["timestamp"] == orig_spot[sym]["timestamp"]]
                     elif market_type == "futures":
-                        if sym in orig_index:
-                            self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index[sym].sample(frac=1, random_state=i).reset_index(drop=True)
-                        if sym in orig_mark:
-                            self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark[sym].sample(frac=1, random_state=i + 1337).reset_index(drop=True)
+                        if sym in orig_index_future:
+                            self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index_future[sym].sample(frac=1, random_state=i).reset_index(drop=True)
+                            self.data_manager.perpetual_index_ohlcv_data[sym][self.data_manager.perpetual_index_ohlcv_data[sym]["timestamp"] == orig_index_future[sym]["timestamp"]]
+                        if sym in orig_mark_future:
+                            self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark_future[sym].sample(frac=1, random_state=i + 1337).reset_index(drop=True)
+                            self.data_manager.perpetual_mark_ohlcv_data[sym][self.data_manager.perpetual_mark_ohlcv_data[sym]["timestamp"] == orig_mark_future[sym]["timestamp"]]
+                    else:
+                        raise ValueError(f"Invalid market type: {market_type}")
 
             # Align start time to earliest available data
             earliest_ts = None

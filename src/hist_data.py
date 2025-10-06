@@ -42,8 +42,8 @@ from ccxt.pro import binance as binance_pro
 
 import re
 from typing import Optional, Dict, Tuple
-from tools import _is_utc, _get_number_of_periods, _get_timeframe_to_minutes
-from tools import _convert_symbol_to_ccxt, _normalize_symbol_pair
+from src.utils import _is_utc, _get_number_of_periods, _get_timeframe_to_minutes
+from src.utils import _convert_symbol_to_ccxt, _normalize_symbol_pair
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
