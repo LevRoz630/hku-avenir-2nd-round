@@ -105,6 +105,7 @@ class Backtester:
         
         if time_step is None:
             time_step = timedelta(minutes=15)
+
         strategy.oms_client.set_timestep(time_step)
 
         # Run backtest
@@ -165,7 +166,7 @@ class Backtester:
 
     def run_permutation_backtest(self, strategy: Any, symbols: List[str], start_date: datetime = None, end_date: datetime = None, time_step: timedelta = None, market_type: str = None, permutations: int = 100):
         """
-        Run a backtest for a given strategy and symbols with different permutations of the symbols
+        TO DO: FINISH THIS
         """
         
         # Ensure historical data exists for requested symbols; download if missing
@@ -327,9 +328,11 @@ class Backtester:
         # Calculate Sharpe ratio (use period returns; assume 24 periods/day for 1h)
         if self.period_returns:
             mean_return = np.mean(self.period_returns)
+            risk_free_rate = 0
+            # risk free rate is 0 as we don't have risk free assets and caclulating it from hold would be a pain
             std_return = np.std(self.period_returns)
             if std_return > 0:
-                self.sharpe_ratio = mean_return / std_return * np.sqrt(252*24*4)
+                self.sharpe_ratio = (mean_return - risk_free_rate) / std_return 
     
 
     def print_results(self, results: Dict[str, Any]):

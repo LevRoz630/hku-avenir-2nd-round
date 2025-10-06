@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from backtester import Backtester
 from strategies.v1_pairs import PairTradingStrategy, set_pairs_config
-# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config
+# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def main():
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
     start_date = datetime.now(timezone.utc) - timedelta(days=100)
-    end_date = datetime.now(timezone.utc)
+    end_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)
