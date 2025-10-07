@@ -71,6 +71,18 @@ def main():
     # # backtester.print_results(results)
     # backtester.save_results(results, "v1_pairs_bt")
     # backtester.plot_results(results)
+    
+    # results = backtester.run_backtest(
+    #     strategy=strategy,
+    #     position_manager=position_manager,
+    #     start_date=start_date,
+    #     end_date=end_date,
+    #     time_step=timedelta(days = 1),
+    #     market_type="futures",
+    # )
+    # backtester.print_results(results)
+    # backtester.save_results(results, "v1_pairs_bt")
+    # backtester.plot_results(results)
 
     # results = backtester.run_permutation_backtest(
     #     strategy=strategy,
@@ -83,6 +95,17 @@ def main():
     # )
     # print("p_value:", results.get("p_value"))
     # print("sharpes:", results.get("sharpes"))
+    results = backtester.run_permutation_backtest(
+        strategy=strategy,
+        position_manager=position_manager,
+        start_date=start_date,
+        end_date=end_date,
+        time_step=timedelta(days = 1),
+        market_type="futures",
+        permutations=3,
+    )
+    print("p_value:", results.get("p_value"))
+    print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

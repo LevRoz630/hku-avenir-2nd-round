@@ -301,6 +301,7 @@ class Backtester:
 
             # Run loop
             iteration = 0
+
             while self.oms_client.current_time <= end_date:
                 try:
                     total_value = self.oms_client.get_total_portfolio_value()
@@ -324,6 +325,7 @@ class Backtester:
 
                     self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                     iteration += 1
+                    
                 except Exception as e:
                     logger.error(f"Error in backtest iteration {iteration}: {e}")
                     self.oms_client.set_current_time(self.oms_client.current_time + time_step)

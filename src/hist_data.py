@@ -167,6 +167,43 @@ class HistoricalDataCollector:
         pattern = patterns[kind]
         return sorted(self.data_dir.glob(pattern))
 
+    def load_from_class(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
+        """Load data from class structures
+        Returns a slice of the data between start_date and end_date
+        Used for permutations as we shuffle teh data insdie of the class and using load_from_cache() leads to same data being used for algo
+        """
+        if kind == "ohlcv_spot":
+            df = self.spot_ohlcv_data[symbol]
+        elif kind == "mark_ohlcv_futures":
+            df = self.perpetual_mark_ohlcv_data[symbol]
+        elif kind == "index_ohlcv_futures":
+            df = self.perpetual_index_ohlcv_data[symbol]
+        else:
+            raise ValueError(f"Invalid kind: {kind}")
+        
+        if df.empty:
+            raise ValueError(f"No data for {symbol} {kind}")
+
+        try:
+            s = pd.Timestamp(start_date).tz_convert('UTC') if pd.Timestamp(start_date).tzinfo is not None else pd.Timestamp(start_date, tz='UTC')
+            e = pd.Timestamp(end_date).tz_convert('UTC') if pd.Timestamp(end_date).tzinfo is not None else pd.Timestamp(end_date, tz='UTC')
+            ts = df['timestamp']
+
+            if not pd.api.types.is_datetime64_any_dtype(ts):
+                df = df.copy()
+                df['timestamp'] = pd.to_datetime(ts, errors='coerce')
+
+            df_now = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
+
+            if df_now.empty:
+                logger.warning(f"No data for {symbol} {kind} between {start_date} and {end_date}")
+            return df_now
+
+        except Exception as e:
+            logger.warning(f"Error loading data from class: {e}")
+            return None
+
+    
     def load_cached_window(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
         """Return cached parquet data sliced to [start_date, end_date] if available, else None."""
         files = self._cache_glob(kind, symbol, timeframe)
@@ -218,7 +255,7 @@ class HistoricalDataCollector:
         return out.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                        start_date: datetime, end_date: datetime, export: bool = False):
+                            start_date: datetime, end_date: datetime, export: bool = False, read_only: bool = False):
         """
         Unified wrapper function to load historical data for a specific time period.
         
@@ -246,7 +283,9 @@ class HistoricalDataCollector:
             End date and time for data collection
         export : bool, optional
             Whether to export data to Parquet files. Default is False.
-        
+        read_only : bool, optional
+            Whether to read data from cache or class structures. Default is True.
+            If False, data is read from cache, TRUE FOR PERMUTATIONS.
         Returns
         -------
         pandas.DataFrame
@@ -274,6 +313,7 @@ class HistoricalDataCollector:
         ...                                        start_time, end_time, export=True)
         >>> print(mark_data.columns)
         """
+
         data_types = ["ohlcv_spot", "index_ohlcv_futures", "mark_ohlcv_futures", 
                      "funding_rates", "open_interest", "trades_futures"]
         
@@ -312,10 +352,17 @@ class HistoricalDataCollector:
             'open_interest': 'open_interest',
             'trades_futures': 'trades_futures',
         }
-        cached = self.load_cached_window(
-            kind_map[data_type], symbol, start_date, end_date,
-            timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
-        )
+        if read_only:
+            cached = self.load_from_class(
+                kind_map[data_type], symbol, start_date, end_date,
+                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+            )
+        else:
+            cached = self.load_cached_window(
+                kind_map[data_type], symbol, start_date, end_date,
+                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+            )
+
         if cached is not None and not cached.empty:
             # Populate in-memory store so downstream readers (e.g., OMS) can source prices
             if data_type == 'ohlcv_spot':
