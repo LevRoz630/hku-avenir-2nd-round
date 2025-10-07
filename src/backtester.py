@@ -260,14 +260,14 @@ class Backtester:
                     # reshuffle again and then restore the timestamp to only change the targets
                     if market_type == "spot" and sym in orig_spot:
                         self.data_manager.spot_ohlcv_data[sym] = orig_spot[sym].sample(frac=1, random_state=i).reset_index(drop=True)
-                        self.data_manager.spot_ohlcv_data[sym][self.data_manager.spot_ohlcv_data[sym]["timestamp"] == orig_spot[sym]["timestamp"]]
+                        self.data_manager.spot_ohlcv_data[sym]["timestamp"] = orig_spot[sym]["timestamp"]
                     elif market_type == "futures":
                         if sym in orig_index_future:
                             self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index_future[sym].sample(frac=1, random_state=i).reset_index(drop=True)
-                            self.data_manager.perpetual_index_ohlcv_data[sym][self.data_manager.perpetual_index_ohlcv_data[sym]["timestamp"] == orig_index_future[sym]["timestamp"]]
+                            self.data_manager.perpetual_index_ohlcv_data[sym]["timestamp"] = orig_index_future[sym]["timestamp"]
                         if sym in orig_mark_future:
                             self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark_future[sym].sample(frac=1, random_state=i + 1337).reset_index(drop=True)
-                            self.data_manager.perpetual_mark_ohlcv_data[sym][self.data_manager.perpetual_mark_ohlcv_data[sym]["timestamp"] == orig_mark_future[sym]["timestamp"]]
+                            self.data_manager.perpetual_mark_ohlcv_data[sym]["timestamp"] = orig_mark_future[sym]["timestamp"]
                     else:
                         raise ValueError(f"Invalid market type: {market_type}")
 
