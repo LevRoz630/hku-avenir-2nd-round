@@ -69,8 +69,10 @@ class PositionManager:
                     '15m',
                     'mark_ohlcv_futures',
                     self.oms_client.current_time - timedelta(hours=4),
-                    self.oms_client.current_time
+                    self.oms_client.current_time,
                 )
+                print("symbol: ", order['symbol'])
+                print("base_symbol: ", base_symbol)
                 if data is None or len(data) == 0:
                     cleaned.append(order)
                     continue
@@ -113,7 +115,7 @@ class PositionManager:
                         '15m',
                         'mark_ohlcv_futures',
                         self.oms_client.current_time - timedelta(days=1),
-                        self.oms_client.current_time
+                        self.oms_client.current_time,
                     )
                     if data is None or len(data) == 0:
                         inv_vols.append(0.0)

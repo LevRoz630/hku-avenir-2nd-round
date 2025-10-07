@@ -26,7 +26,6 @@ class OMSClient:
     - Tracks balances and symbol positions
     - Converts target USDT to quantity at current price
     - Records trade history and realized PnL on close/flip
-    - Serves prices via HistoricalDataCollector with per-timestep caching
     """
     
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
@@ -36,17 +35,10 @@ class OMSClient:
         self.trade_history = []  # All trades executed
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
-
-        self.timestep = None
         
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
-
-
-    def set_timestep(self, timestep: timedelta):
-        """Set timestep"""
-        self.timestep = timestep
 
     def set_data_manager(self, data_manager: HistoricalDataCollector):
         """Set data manager"""
@@ -103,7 +95,6 @@ class OMSClient:
                 
         except Exception as e:
             logger.error(f"Error setting target position: {e}")
-            return {"id": f"error_{len(self.trade_history)}", "status": "error", "message": str(e)}
  
     def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
         """Set position using USDT amount; converts to quantity at current price"""
@@ -215,30 +206,15 @@ class OMSClient:
 
         try:
             base_symbol = self._normalize_symbol(symbol, instrument_type)
-            store = self.data_manager.spot_ohlcv_data if instrument_type == 'spot' else (
-                self.data_manager.perpetual_mark_ohlcv_data if instrument_type == 'future' else None
-            )
-            if store is None:
-                raise ValueError(f"Invalid price type: {instrument_type}")
-            df = store.get(base_symbol)
-            if df is None or df.empty:
-                return None
-            ts = df['timestamp']
-            if not pd.api.types.is_datetime64_any_dtype(ts):
-                df = df.copy()
-                df['timestamp'] = pd.to_datetime(ts, errors='coerce')
-            # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
-            time_step_diff = df['timestamp'].diff().min()
-            df_now = df[df['timestamp'] <= (self.current_time + time_step_diff)]
 
-            if df_now.empty:
-                return None
-            price = float(df_now['close'].iloc[-1])
+            df = self.data_manager.load_data_period(base_symbol, "15m", "ohlcv_spot" if instrument_type == 'spot' else "mark_ohlcv_futures", self.current_time, self.current_time + timedelta(minutes=15), load_from_class=False)
+            if df.empty:
+                raise Exception(f"No data for {symbol} {instrument_type} between {self.current_time} and {self.current_time + timedelta(minutes=15)} in cache")
+            price = float(df['close'].iloc[-1])
             return price
         except Exception as e:
             logger.error(f"Error getting current {instrument_type} price for {symbol}: {e}")
-        
-        return None
+            return None
     
     def close_position(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""

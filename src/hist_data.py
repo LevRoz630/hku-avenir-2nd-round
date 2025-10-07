@@ -167,44 +167,46 @@ class HistoricalDataCollector:
         pattern = patterns[kind]
         return sorted(self.data_dir.glob(pattern))
 
-    def load_from_class(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
+    def load_from_class(self, kind: str, symbol: str, start_date, end_date):
         """Load data from class structures
         Returns a slice of the data between start_date and end_date
         Used for permutations as we shuffle teh data insdie of the class and using load_from_cache() leads to same data being used for algo
         """
-        if kind == "ohlcv_spot":
-            df = self.spot_ohlcv_data[symbol]
-        elif kind == "mark_ohlcv_futures":
-            df = self.perpetual_mark_ohlcv_data[symbol]
-        elif kind == "index_ohlcv_futures":
-            df = self.perpetual_index_ohlcv_data[symbol]
-        else:
-            raise ValueError(f"Invalid kind: {kind}")
-        
-        if df.empty:
-            raise ValueError(f"No data for {symbol} {kind}")
+        try:
+            if kind == "ohlcv_spot":
+                df = self.spot_ohlcv_data.get(symbol)
+            elif kind == "mark_ohlcv_futures":
+                df = self.perpetual_mark_ohlcv_data.get(symbol)
+            elif kind == "index_ohlcv_futures":
+                df = self.perpetual_index_ohlcv_data.get(symbol)
+            else:
+                raise ValueError(f"Invalid kind: {kind}")
+            
+            if df.empty:
+                raise Exception(f"No data for {symbol} {kind} found in class structure")
+                return None
 
+
+        except Exception as e:
+            logger.error(f"Error loading data from class: {e}")
+            return None
+        
         try:
             s = pd.Timestamp(start_date).tz_convert('UTC') if pd.Timestamp(start_date).tzinfo is not None else pd.Timestamp(start_date, tz='UTC')
             e = pd.Timestamp(end_date).tz_convert('UTC') if pd.Timestamp(end_date).tzinfo is not None else pd.Timestamp(end_date, tz='UTC')
             ts = df['timestamp']
 
-            if not pd.api.types.is_datetime64_any_dtype(ts):
-                df = df.copy()
-                df['timestamp'] = pd.to_datetime(ts, errors='coerce')
-
-            df_now = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
-
-            if df_now.empty:
-                logger.warning(f"No data for {symbol} {kind} between {start_date} and {end_date}")
-            return df_now
-
+            if df['timestamp'].dt.tz is None:
+                df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+            else:
+                df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
+            return df
         except Exception as e:
             logger.warning(f"Error loading data from class: {e}")
             return None
 
     
-    def load_cached_window(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
+    def load_from_cache(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
         """Return cached parquet data sliced to [start_date, end_date] if available, else None."""
         files = self._cache_glob(kind, symbol, timeframe)
         if not files:
@@ -238,7 +240,7 @@ class HistoricalDataCollector:
                     df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
                 ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
                 if ts_max < s or ts_min > e:
-                    continue
+                    logger.error(f"Smething really weird happened and the data that cache spotted doesn't actually have start and end date")
                 sliced = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
                 if sliced.empty:
                     continue
@@ -255,7 +257,7 @@ class HistoricalDataCollector:
         return out.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                            start_date: datetime, end_date: datetime, export: bool = False, read_only: bool = False):
+                            start_date: datetime, end_date: datetime, export: bool = False, load_from_class: bool = True):
         """
         Unified wrapper function to load historical data for a specific time period.
         
@@ -282,9 +284,9 @@ class HistoricalDataCollector:
         end_date : datetime
             End date and time for data collection
         export : bool, optional
-            Whether to export data to Parquet files. Default is False.
-        read_only : bool, optional
-            Whether to read data from cache or class structures. Default is True.
+            Whether to export data to Parquet files and write to class structures. Default is False.
+        load_from_class : bool, optional
+            Whether to load data from class structures. Default is True.
             If False, data is read from cache, TRUE FOR PERMUTATIONS.
         Returns
         -------
@@ -341,8 +343,6 @@ class HistoricalDataCollector:
         if data_type not in data_types:
             raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
         
-
-        
         # Cache-first, then collect
         kind_map = {
             'ohlcv_spot': 'ohlcv_spot',
@@ -352,18 +352,23 @@ class HistoricalDataCollector:
             'open_interest': 'open_interest',
             'trades_futures': 'trades_futures',
         }
-        if read_only:
+        if load_from_class:
             cached = self.load_from_class(
-                kind_map[data_type], symbol, start_date, end_date,
-                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+                kind_map[data_type], symbol, start_date, end_date
+                if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
             )
+            filtered_data = cached
+            if cached is None:
+                logger.info(f"No data found for {symbol} {data_type} {timeframe}, fetching from network")
+                
         else:
-            cached = self.load_cached_window(
-                kind_map[data_type], symbol, start_date, end_date,
-                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+            cached = self.load_from_cache(
+                kind_map[data_type], symbol, start_date, end_date
+                if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
             )
+            filtered_data = cached
 
-        if cached is not None and not cached.empty:
+        if cached is not None and export:
             # Populate in-memory store so downstream readers (e.g., OMS) can source prices
             if data_type == 'ohlcv_spot':
                 self.spot_ohlcv_data[symbol] = cached
@@ -379,7 +384,7 @@ class HistoricalDataCollector:
                 self.perpetual_trades_data[symbol] = cached
             filtered_data = cached
 
-        else:
+        if cached is None and export:
             logger.info(
                 f"Cache miss: {data_type} {symbol} {timeframe} "
                 f"[{pd.Timestamp(start_date)} -> {pd.Timestamp(end_date)}], fetching from network"
@@ -404,8 +409,13 @@ class HistoricalDataCollector:
                 filtered_data = self.perpetual_trades_data.get(symbol)
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
-        
+
+        if filtered_data is None:
+            raise ValueError(f"Something went really wrong and we couldn't load the data")
+
         # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
+        # Ensure we operate on a copy to avoid SettingWithCopyWarning if upstream provided a view
+        filtered_data = filtered_data.copy()
         if not pd.api.types.is_datetime64_any_dtype(filtered_data["timestamp"]):
             filtered_data["timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
         else:

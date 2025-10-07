@@ -52,8 +52,8 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days = 120)
-    end_date = datetime.now(timezone.utc) - timedelta(days = 1)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 10)
+    end_date = datetime.now(timezone.utc) - timedelta(days = 2)
 
     position_manager = PositionManager()
     backtester = Backtester()

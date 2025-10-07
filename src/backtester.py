@@ -88,13 +88,13 @@ class Backtester:
         for sym in base_symbols:
             try:
                 if market_type == "spot":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
                 elif market_type == "futures":
                     # this is data for the backtest loop 
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
 
                     # this is data for price taking estiamtions when the position is opened  and risk management 
-                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
                 else:
                         raise ValueError(f"Invalid market type: {market_type}")
             except Exception as e:
@@ -108,15 +108,20 @@ class Backtester:
                 df = store.get(sym)
                 if df is not None and not df.empty:
                     first = df['timestamp'].min()  # first available candle for this store
+                    if first.tz is not None:
+                        first = first.tz_convert('UTC')
+                    else:
+                        first = first.tz_localize('UTC')
                     earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
+
         aligned_start = start_date
         if earliest_ts is not None:
             # Ensure both are comparable (convert to naive UTC if needed)
             s = pd.Timestamp(start_date)
             e = pd.Timestamp(earliest_ts)
-            if s.tz is not None:
+            if s.tz is None:
                 s = s.tz_convert('UTC').tz_localize(None)
-            if e.tz is not None:
+            if e.tz is None:
                 e = e.tz_convert('UTC').tz_localize(None)
             if s < e:
                 aligned_start = earliest_ts
@@ -127,7 +132,6 @@ class Backtester:
 
         # Set the time for data fetching and orders that will be updated as strategy progresses
         self.oms_client.set_current_time(strategy.start_time)
-        self.oms_client.set_timestep(time_step)
         self.oms_client.set_data_manager(self.data_manager)
 
         # Run backtest
@@ -220,10 +224,10 @@ class Backtester:
         for sym in base_symbols:
             try:
                 if market_type == "spot":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
                 elif market_type == "futures":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
-                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
                 else:
                     raise ValueError(f"Invalid market type: {market_type}")
             except Exception as e:
@@ -278,6 +282,10 @@ class Backtester:
                     df = store.get(sym)
                     if df is not None and not df.empty:
                         first = df['timestamp'].min()
+                        if first.tz is None:
+                            first = first.tz_localize('UTC')
+                        else:
+                            first = first.tz_convert('UTC')
                         earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
             aligned_start = start_date
             if earliest_ts is not None and start_date < earliest_ts:
@@ -296,7 +304,6 @@ class Backtester:
 
             # Set time and data context
             self.oms_client.set_current_time(strategy.start_time)
-            self.oms_client.set_timestep(time_step)
             self.oms_client.set_data_manager(self.data_manager)
 
             # Run loop
