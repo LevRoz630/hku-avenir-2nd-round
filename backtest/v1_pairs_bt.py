@@ -57,18 +57,18 @@ def main():
     position_manager = PositionManager()
     backtester = Backtester()
     strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=20)
-    # results = backtester.run_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    # )
+    results = backtester.run_backtest(
+        strategy=strategy,
+        position_manager=position_manager,
+        start_date=start_date,
+        end_date=end_date,
+        time_step=timedelta(days = 1),
+        market_type="futures",
+    )
+    backtester.print_results(results)
     # backtester.print_results(results)
-    # # backtester.print_results(results)
-    # backtester.save_results(results, "v1_pairs_bt")
-    # backtester.plot_results(results)
+    backtester.save_results(results, "v1_pairs_bt")
+    backtester.plot_results(results)
 
     results = backtester.run_permutation_backtest(
         strategy=strategy,
@@ -77,13 +77,10 @@ def main():
         end_date=end_date,
         time_step=timedelta(days = 1),
         market_type="futures",
-        permutations=3,
+        permutations=10,
     )
     print("p_value:", results.get("p_value"))
-    if results.get("observed_results"):
-        backtester.print_results(results["observed_results"])
-        backtester.save_results(results["observed_results"], "v1_pairs_bt")
-        backtester.plot_results(results["observed_results"])
+    print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

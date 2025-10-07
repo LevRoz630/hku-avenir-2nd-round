@@ -7,9 +7,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import logging
 
-# Add current dir (for local strategies) and src (engine)
+# Add current dir (for local strategies) and project src (engine)
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent / "src"))
+sys.path.append(str(Path(__file__).parents[2] / "src"))
 
 from position_manager import PositionManager
 from backtester import Backtester
@@ -37,23 +37,23 @@ def main():
     strategy = HoldStrategy(symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT"], lookback_days = 0)
     position_manager = PositionManager()
     start_date = datetime.now(timezone.utc) - timedelta(days = 50)
-    end_date = datetime.now(timezone.utc)
+    end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
-    results = backtester.run_backtest(
-        strategy=strategy,
-        position_manager=position_manager,
-        start_date=start_date,
-        end_date=end_date,
-        time_step=timedelta(days = 1),
-        market_type="futures",
-    )
+    # results = backtester.run_backtest(
+    #     strategy=strategy,
+    #     position_manager=position_manager,
+    #     start_date=start_date,
+    #     end_date=end_date,
+    #     time_step=timedelta(days = 1),
+    #     market_type="futures",
+    # )
     
-    backtester.print_results(results)
+    # backtester.print_results(results)
 
-    # Plot results
-    backtester.plot_results(results)
+    # # Plot results
+    # backtester.plot_results(results)
 
-    backtester.save_results(results, "hold_strategy")
+    # backtester.save_results(results, "hold_strategy")
 
 
     results = backtester.run_permutation_backtest(
@@ -63,13 +63,10 @@ def main():
         end_date=end_date,
         time_step=timedelta(days = 1),
         market_type="futures",
-        permutations=3,
+        permutations=10,
     )
     print("p_value:", results.get("p_value"))
-    if results.get("observed_results"):
-        backtester.print_results(results["observed_results"])
-        backtester.save_results(results["observed_results"], "hold_strategy")
-        backtester.plot_results(results["observed_results"])
+    print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

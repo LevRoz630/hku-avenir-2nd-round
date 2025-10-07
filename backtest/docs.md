@@ -59,17 +59,29 @@ from strategies.v1_hold import HoldStrategy
 bt = Backtester(historical_data_dir="./historical_data")
 strategy = HoldStrategy(symbols=["BTC-USDT","ETH-USDT"], lookback_days=0)
 pm = PositionManager()
+start_date = datetime.now(timezone.utc)-timedelta(days=30)
+end_date = datetime.now(timezone.utc)
 results = bt.run_backtest(
     strategy=strategy,
     position_manager=pm,
-    start_date=datetime.now(timezone.utc)-timedelta(days=30),
-    end_date=datetime.now(timezone.utc),
+    start_date=start_date,
+    end_date=end_date,
     time_step=timedelta(hours=1),
     market_type="futures",
 )
 
 
-Permutations here
+results = backtester.run_permutation_backtest(
+    strategy=strategy,
+    position_manager=pm,
+    start_date=start_date,
+    end_date=end_date,
+    time_step=timedelta(days = 1),
+    market_type="futures",
+    permutations=3,
+)
+print("p_value:", results.get("p_value"))
+
 ```
 
 
