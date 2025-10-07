@@ -1,32 +1,48 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-from oms_simulation import BacktesterOMS
+from oms_simulation import OMSClient
 import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from hist_data import HistoricalDataCollector
-from format_utils import format_positions_table, format_balances_table 
+from format_utils import format_positions_table, format_balances_table
+from position_manager import PositionManager
+import matplotlib.pyplot as plt
+import json
 
 logger = logging.getLogger(__name__)
 
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
+        """High-level backtest runner coordinating data, strategy and OMS.
+
+        Responsibilities:
+        - Ensure historical data availability and push into the collector cache
+        - Iterate the clock, ask strategy for orders, run PositionManager filters
+        - Send sized orders to OMS and track portfolio metrics
+
+        Automatically sets up OMSClient and HistoricalDataCollector.
+        Strategy and PositionManager are passed as an argument to run_backtest ()
+        """
+        self.data_manager = HistoricalDataCollector(historical_data_dir)
+        self.oms_client = OMSClient(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
         self.portfolio_values = []
-        self.period_returns = []
+        self.returns = []
         self.max_drawdown = 0
         self.sharpe_ratio = 0
         self.trade_history = []
         self.final_balance = 0
         self.final_positions = []
+        self.position_manager = None
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
         
     def run_backtest(self, 
                         strategy: Any,
-                        symbols: List[str],
+                        position_manager: PositionManager,
                         start_date: datetime = None,
                         end_date: datetime = None,
                         time_step: timedelta = None,
@@ -37,49 +53,58 @@ class Backtester:
         - Ensures data exists (downloads if missing)
         - Loads data into memory via HistoricalDataCollector
         - Aligns start_time to first available candle
-        - Iterates time, lets strategy place orders via OMS
+        - Iterates time, lets strategy place orders via OMSClient
         - Aggregates portfolio values and computes metrics
 
         Args:
-            strategy: Instantiated strategy object
-            symbols: Symbols to backtest (supports -PERP for perps)
-            start_date: Start datetime (aligned to first data if earlier)
+            strategy: Instantiated strategy object (must expose `symbols` and `lookback_days`)
+            position_manager: Instantiated position manager object
+            start_date: Start datetime (aligned to earliest available data if earlier)
             end_date: End datetime
-            time_step: Time delta between backtest iterations
-            market_type: Market type to backtest (spot or futures)
+            time_step: Time delta between backtest iterations (maps to data timeframe)
+            market_type: "spot" or "futures"; futures loop uses index OHLCV and mark for execution
         Returns:
             Results dict with PnL series and summary metrics
         """
-        
-        
+        try:
+            self.position_manager = position_manager
+            symbols = strategy.symbols
+            # Ensure historical data exists for requested symbols; download if missing
+            data_path = Path(self.historical_data_dir)
+            base_symbols = [s.replace('-PERP', '') for s in symbols]
+            data_path.mkdir(parents=True, exist_ok=True)
 
-        # Ensure historical data exists for requested symbols; download if missing
-        data_path = Path(self.historical_data_dir)
-        base_symbols = [s.replace('-PERP', '') for s in symbols]
-        data_path.mkdir(parents=True, exist_ok=True)
-        desired_timeframe = self._time_step_to_timeframe(time_step)
+            if time_step is None:
+                raise ValueError("Time step is required")
+
+            desired_timeframe = self._time_step_to_timeframe(time_step)
 
 
-        data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = strategy.oms_client.data_manager
-        
+            data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
+        except Exception as e:
+            logger.error(f"Error in run_backtest: {e}")
+            return None
 
         for sym in base_symbols:
-            if market_type == "spot":
-                dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
-            elif market_type == "futures":
-                # this is data for the backtest loop 
-                dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+            try:
+                if market_type == "spot":
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                elif market_type == "futures":
+                    # this is data for the backtest loop 
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
-                # this is data for price taking estiamtions when the position is opened  and risk management 
-                dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
-            else:
-                raise ValueError(f"Invalid market type: {market_type}")
+                    # this is data for price taking estiamtions when the position is opened  and risk management 
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                else:
+                        raise ValueError(f"Invalid market type: {market_type}")
+            except Exception as e:
+                logger.error(f"Error loading data: {e} for {sym}")
+                continue
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
         for sym in base_symbols:
-            for store in [dm.spot_ohlcv_data, dm.perpetual_mark_ohlcv_data, dm.perpetual_index_ohlcv_data]:
+            for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
                 df = store.get(sym)
                 if df is not None and not df.empty:
                     first = df['timestamp'].min()  # first available candle for this store
@@ -101,185 +126,227 @@ class Backtester:
         strategy.end_time = end_date
 
         # Set the time for data fetching and orders that will be updated as strategy progresses
-        strategy.oms_client.set_current_time(strategy.start_time)
-        
-        if time_step is None:
-            time_step = timedelta(minutes=15)
-
-        strategy.oms_client.set_timestep(time_step)
+        self.oms_client.set_current_time(strategy.start_time)
+        self.oms_client.set_timestep(time_step)
+        self.oms_client.set_data_manager(self.data_manager)
 
         # Run backtest
         iteration = 0
 
-        while strategy.oms_client.current_time <= end_date:
+        while self.oms_client.current_time <= end_date:
             try:
                 # Revalue portfolio at the current timestamp
-                total_value = strategy.oms_client.get_total_portfolio_value()
+                total_value = self.oms_client.get_total_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
                 try:
-                    positions_tbl = format_positions_table(strategy.oms_client.get_position())
+                    positions_tbl = format_positions_table(self.oms_client.get_position())
                     logger.info("\nPositions:\n" + positions_tbl)
 
                 except Exception as _e:
                     # Fallback to raw summary on any formatting error
-                    summary = strategy.oms_client.get_position_summary()
+                    summary = self.oms_client.get_position_summary()
                     logger.info(f"Position Summary: {summary}")
 
-                strategy.run_strategy()
+                orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
+                
+                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
+
+                if filtered_orders is not None:
+                    for order in filtered_orders:
+                        try:
+                            self.oms_client.set_target_position(
+                                order['symbol'],
+                                order['instrument_type'],
+                                order.get('value', 0.0),
+                                order['side']
+                            )
+                        except Exception as e:
+                            logger.error(f"Error setting target position: {e}")
+                            continue
 
                 # Move to next time step
-                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 iteration += 1
                     
             except Exception as e:
                 logger.error(f"Error in backtest iteration {iteration}: {e}")
-                strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 continue
         
         # Calculate final performance metrics
         self.calculate_performance_metrics()
-        
-        # Convert portfolio_values to pandas Series to use .diff()
-        portfolio_series = pd.Series(self.portfolio_values)
-        self.returns = portfolio_series.diff().dropna()
         # Return results
         results = {
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
             'returns': self.returns,
             'max_drawdown': self.max_drawdown,
             'sharpe_ratio': self.sharpe_ratio,
-            'trade_history': strategy.oms_client.trade_history,
-            'final_balance': strategy.oms_client.get_account_balance(),
-            'final_positions': strategy.oms_client.get_position()
+            'trade_history': self.oms_client.trade_history,
+            'final_balance': self.oms_client.balance,
+            'final_positions': self.oms_client.get_position()
         }
 
-        # Cleanly close live clients
-        try:
-            strategy.oms_client.data_manager.close()
-        except Exception:
-            pass
         return results
 
 
 
-    def run_permutation_backtest(self, strategy: Any, symbols: List[str], start_date: datetime = None, end_date: datetime = None, time_step: timedelta = None, market_type: str = None, permutations: int = 100):
+    def run_permutation_backtest(self, 
+                                 strategy: Any,
+                                 position_manager: PositionManager,
+                                 start_date: datetime = None,
+                                 end_date: datetime = None,
+                                 time_step: timedelta = None,
+                                 market_type: str = None,
+                                 permutations: int = 100):
         """
-        TO DO: FINISH THIS
+        Shuffle price history multiple times and re-run the strategy to form a null
+        distribution for performance statistics. Index 0 is the observed (unshuffled) run.
         """
-        
+
         # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
+        symbols = strategy.symbols
         base_symbols = [s.replace('-PERP', '') for s in symbols]
         data_path.mkdir(parents=True, exist_ok=True)
+        if time_step is None:
+            raise ValueError("Time step is required")
         desired_timeframe = self._time_step_to_timeframe(time_step)
 
-
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-        dm = strategy.oms_client.data_manager
-        
-        for i in range(permutations+1):
-            print(f"permutation {i} of {permutations}")
-            if i == 0:
-                for sym in symbols:
-                    if market_type == "spot":
-                        dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
-                    elif market_type == "futures":
-                        dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
 
-                        # this is data for price taking estiamtions when the position is opened  and risk management 
-                        dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+        # Initial data load
+        for sym in base_symbols:
+            try:
+                if market_type == "spot":
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
+                elif market_type == "futures":
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
+                else:
+                    raise ValueError(f"Invalid market type: {market_type}")
+            except Exception as e:
+                logger.error(f"Error loading data: {e} for {sym}")
+                continue
+
+        # Snapshot starting balance to reset between permutations
+        starting_balance = float(self.oms_client.balance.get('USDT', 10000.0))
+        self.permutation_returns = []
+
+        # Snapshot original dataframes to ensure i=0 uses exact originals and each
+        # permutation shuffles independently from the same baseline
+        orig_spot = {}
+        orig_index_future = {}
+        orig_mark_future = {}
+
+        for sym in base_symbols:
+            if market_type == "spot":
+                orig_spot[sym] = self.data_manager.spot_ohlcv_data.get(sym)
+            elif market_type == "futures":
+                orig_index_future[sym] = self.data_manager.perpetual_index_ohlcv_data.get(sym)
+                orig_mark_future[sym] = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
+            else:
+                raise ValueError(f"Invalid market type: {market_type}")
+
+
+        observed_results: Dict[str, Any] = None
+
+        for i in range(permutations + 1):
+            logger.info(f"permutation {i} of {permutations}")
+
+            if i > 0:
+                for sym in base_symbols:
+                    # reshuffle again and then restore the timestamp to only change the targets
+                    if market_type == "spot" and sym in orig_spot:
+                        self.data_manager.spot_ohlcv_data[sym] = orig_spot[sym].sample(frac=1, random_state=i).reset_index(drop=True)
+                        self.data_manager.spot_ohlcv_data[sym][self.data_manager.spot_ohlcv_data[sym]["timestamp"] == orig_spot[sym]["timestamp"]]
+                    elif market_type == "futures":
+                        if sym in orig_index_future:
+                            self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index_future[sym].sample(frac=1, random_state=i).reset_index(drop=True)
+                            self.data_manager.perpetual_index_ohlcv_data[sym][self.data_manager.perpetual_index_ohlcv_data[sym]["timestamp"] == orig_index_future[sym]["timestamp"]]
+                        if sym in orig_mark_future:
+                            self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark_future[sym].sample(frac=1, random_state=i + 1337).reset_index(drop=True)
+                            self.data_manager.perpetual_mark_ohlcv_data[sym][self.data_manager.perpetual_mark_ohlcv_data[sym]["timestamp"] == orig_mark_future[sym]["timestamp"]]
                     else:
                         raise ValueError(f"Invalid market type: {market_type}")
 
-            # Align start time to earliest available data so prices exist at t0
+            # Align start time to earliest available data
             earliest_ts = None
             for sym in base_symbols:
-                for store in [dm.spot_ohlcv_data, dm.perpetual_mark_ohlcv_data, dm.perpetual_index_ohlcv_data]:
+                for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
                     df = store.get(sym)
                     if df is not None and not df.empty:
-                        first = df['timestamp'].min()  # first available candle for this store
+                        first = df['timestamp'].min()
                         earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
             aligned_start = start_date
             if earliest_ts is not None and start_date < earliest_ts:
                 aligned_start = earliest_ts
 
-            if i > 0:
-                for symbol in symbols:
-                    df  = dm.spot_ohlcv_data.get(symbol) 
-                    if df is not None and not df.empty:
-                        dm.spot_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
+            # Reset OMS and strategy state
+            self.oms_client.positions = {}
+            self.oms_client.trade_history = []
+            self.oms_client.balance = {"USDT": starting_balance}
+            self.portfolio_values = []
+            self.returns = []
 
-                    df  = dm.perpetual_index_ohlcv_data.get(symbol)
-                    if df is not None and not df.empty:
-                        dm.perpetual_index_ohlcv_data[symbol] = df.sample(frac=1).reset_index(drop=True)
-
-            # Define start and end times for the strategy
             strategy.start_time = aligned_start
             strategy.end_time = end_date
+            self.position_manager = position_manager
 
-            # Set the time for data fetching and orders that will be updated as strategy progresses
-            strategy.oms_client.set_current_time(strategy.start_time)
-            
-            if time_step is None:
-                time_step = timedelta(minutes=15)
-            strategy.oms_client.set_timestep(time_step)
+            # Set time and data context
+            self.oms_client.set_current_time(strategy.start_time)
+            self.oms_client.set_timestep(time_step)
+            self.oms_client.set_data_manager(self.data_manager)
 
-            # Run backtest
+            # Run loop
             iteration = 0
-
-            while strategy.oms_client.current_time <= end_date:
+            while self.oms_client.current_time <= end_date:
                 try:
-                    # Revalue portfolio at the current timestamp
-                    total_value = strategy.oms_client.get_total_portfolio_value()
+                    total_value = self.oms_client.get_total_portfolio_value()
                     self.portfolio_values.append(total_value)
-                    logger.info(f"Total Portfolio Value: {total_value}")
-                    # Pretty-print balances and positions
                     try:
-                        positions_tbl = format_positions_table(strategy.oms_client.get_position())
+                        positions_tbl = format_positions_table(self.oms_client.get_position())
                         logger.info("\nPositions:\n" + positions_tbl)
-
                     except Exception as _e:
-                        # Fallback to raw summary on any formatting error
-                        summary = strategy.oms_client.get_position_summary()
+                        summary = self.oms_client.get_position_summary()
                         logger.info(f"Position Summary: {summary}")
 
-                    strategy.run_strategy()
+                    orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
+                    filtered = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
+                    if filtered is not None:
+                        for order in filtered:
+                            try:
+                                self.oms_client.set_target_position(order['symbol'], order['instrument_type'], order.get('value', 0.0), order['side'])
+                            except Exception as e:
+                                logger.error(f"Error setting target position: {e}")
+                                continue
 
-                    # Move to next time step
-                    strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                     iteration += 1
-                        
                 except Exception as e:
                     logger.error(f"Error in backtest iteration {iteration}: {e}")
-                    strategy.oms_client.set_current_time(strategy.oms_client.current_time + time_step)
+                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                     continue
-            
-            print(f"permutation {i} of {permutations} complete")
-            # Calculate final performance metrics and record this run's returns
+
+            # Finish and record metrics for this permutation
+            logger.info(f"permutation {i} of {permutations} complete")
             self.calculate_performance_metrics()
-            self.permutation_returns.append(np.array(self.period_returns, dtype=float))
-            self.portfolio_values = []
-            self.period_returns = []
-            self.trade_history = []
-            self.final_positions = []
+            self.permutation_returns.append(np.array(self.returns, dtype=float))
 
-            for sym in symbols:
-                if market_type == "spot":
-                    dm.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True)
-                elif market_type == "futures":
-                    dm.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True)
+            # Capture observed run's result payload for caller
+            if i == 0:
+                observed_results = {
+                    'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
+                    'returns': list(self.returns),
+                    'max_drawdown': self.max_drawdown,
+                    'sharpe_ratio': self.sharpe_ratio,
+                    'trade_history': list(self.oms_client.trade_history),
+                    'final_balance': dict(self.oms_client.balance),
+                    'final_positions': self.oms_client.get_position()
+                }
 
-                    # this is data for price taking estiamtions when the position is opened  and risk management 
-                    dm.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True)
-                else:
-                    raise ValueError(f"Invalid market type: {market_type}")
-
-
-        print(f"permutation returns: {len(self.permutation_returns)}")
-        # After all permutations, compute permutation p-value on Sharpe ratios
-
+        # Compute permutation p-value on Sharpe ratios
         if len(self.permutation_returns) > 0:
             def _sharpe(arr: np.ndarray) -> float:
                 arr = np.asarray(arr, dtype=float)
@@ -298,9 +365,17 @@ class Backtester:
             sharpes = np.array(sharpe_list, dtype=float)
             B = sharpes.size
             p_value = (1 + np.sum(sharpes >= T_obs)) / (B + 1) if B > 0 and np.isfinite(T_obs) else np.nan
-            return p_value
+            return {
+                'p_value': float(p_value) if np.isfinite(p_value) else np.nan,
+                'observed_results': observed_results,
+                'sharpes': sharpes.tolist(),
+            }
 
-        return None
+        return {
+            'p_value': np.nan,
+            'observed_results': observed_results,
+            'sharpes': [],
+        }
 
     def calculate_performance_metrics(self):
         """Calculate performance metrics"""
@@ -308,12 +383,12 @@ class Backtester:
             return
             
         # Calculate period returns (based on time_step granularity)
-        self.period_returns = []
+        self.returns = []
         for i in range(1, len(self.portfolio_values)):
             prev = self.portfolio_values[i-1]
             curr = self.portfolio_values[i]
             if prev > 0:
-                self.period_returns.append((curr - prev) / prev)
+                self.returns.append((curr - prev) / prev)
         
         # Calculate max drawdown
         peak = self.portfolio_values[0]
@@ -326,14 +401,34 @@ class Backtester:
                 self.max_drawdown = drawdown
         
         # Calculate Sharpe ratio (use period returns; assume 24 periods/day for 1h)
-        if self.period_returns:
-            mean_return = np.mean(self.period_returns)
-            risk_free_rate = 0
-            # risk free rate is 0 as we don't have risk free assets and caclulating it from hold would be a pain
-            std_return = np.std(self.period_returns)
+        if self.returns:
+            mean_return = np.mean(self.returns)
+            std_return = np.std(self.returns)
             if std_return > 0:
-                self.sharpe_ratio = (mean_return - risk_free_rate) / std_return 
+                self.sharpe_ratio = mean_return / std_return
     
+    def plot_results(self, results: Dict[str, Any]):
+        """Plot backtest results"""
+        plt.plot(self.portfolio_values)
+        plt.title("Portfolio Value")
+        plt.xlabel("Time")
+        plt.ylabel("Portfolio Value")
+        plt.grid(True)
+        plt.show()
+
+    def save_results(self, results: Dict[str, Any], filename: str):
+        """Save backtest results"""
+        # Convert non-serializable fields (e.g., datetimes) in trade_history
+        serializable = dict(results)
+        try:
+            serializable['trade_history'] = [
+                {**t, 'timestamp': (t.get('timestamp').isoformat() if isinstance(t.get('timestamp'), datetime) else t.get('timestamp'))}
+                for t in results.get('trade_history', [])
+            ]
+        except Exception:
+            serializable['trade_history'] = results.get('trade_history', [])
+        with open(filename+".json", "w") as f:
+            json.dump(serializable, f)
 
     def print_results(self, results: Dict[str, Any]):
         """Print backtest results in a formatted way"""
