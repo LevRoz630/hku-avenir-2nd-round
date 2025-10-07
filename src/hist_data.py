@@ -528,6 +528,7 @@ class HistoricalDataCollector:
         >>> print(mark_data.head())
         """
 
+
         max_records_per_request = 1000
         all_ohlcv = []
 
@@ -543,6 +544,7 @@ class HistoricalDataCollector:
         filename = f"perpetual_{symbol.replace('-', '_')}_mark_{timeframe}_{start_str}_{end_str}.parquet"
         logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
 
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with mark price parameter
@@ -615,6 +617,7 @@ class HistoricalDataCollector:
         >>> print(index_data.head())
         """
 
+
         max_records_per_request = 1000
         all_ohlcv = []
 
@@ -630,6 +633,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
 
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method with index price parameter
@@ -701,6 +705,10 @@ class HistoricalDataCollector:
         end_time = datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
+
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -711,6 +719,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting funding rates for {symbol}...")
 
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         since = int(start_time.timestamp() * 1000)
         
@@ -799,9 +808,13 @@ class HistoricalDataCollector:
         >>> print(oi_data.head())
         """
 
+
         max_records_per_request = 1000
         all_open_interest = []
 
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         end_time = datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
@@ -815,6 +828,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting open interest for {symbol}...")
 
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
 
         # Collect data using unified collection method
@@ -894,6 +908,10 @@ class HistoricalDataCollector:
         end_time = datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
+
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
 
@@ -905,6 +923,7 @@ class HistoricalDataCollector:
 
         logger.info(f"Collecting perpetual trades for {symbol}...")
 
+        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
         all_trades = []
         current_start_time = start_time
@@ -988,6 +1007,8 @@ class HistoricalDataCollector:
         list
             List of collected data records
         """
+        _is_utc(start_time)
+        _is_utc(end_time)
         _is_utc(start_time)
         _is_utc(end_time)
         # Calculate periods per day based on timeframe

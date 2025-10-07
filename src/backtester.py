@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from oms_simulation import OMSClient
 import logging
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
@@ -109,8 +110,16 @@ class Backtester:
                     first = df['timestamp'].min()  # first available candle for this store
                     earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
         aligned_start = start_date
-        if earliest_ts is not None and start_date < earliest_ts:
-            aligned_start = earliest_ts
+        if earliest_ts is not None:
+            # Ensure both are comparable (convert to naive UTC if needed)
+            s = pd.Timestamp(start_date)
+            e = pd.Timestamp(earliest_ts)
+            if s.tz is not None:
+                s = s.tz_convert('UTC').tz_localize(None)
+            if e.tz is not None:
+                e = e.tz_convert('UTC').tz_localize(None)
+            if s < e:
+                aligned_start = earliest_ts
 
         # Define start and end times for the strategy
         strategy.start_time = aligned_start
