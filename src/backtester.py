@@ -56,13 +56,12 @@ class Backtester:
         - Aggregates portfolio values and computes metrics
 
         Args:
-            strategy: Instantiated strategy object
+            strategy: Instantiated strategy object (must expose `symbols` and `lookback_days`)
             position_manager: Instantiated position manager object
-            symbols: Symbols to backtest (supports -PERP for perps)
-            start_date: Start datetime (aligned to first data if earlier)
+            start_date: Start datetime (aligned to earliest available data if earlier)
             end_date: End datetime
-            time_step: Time delta between backtest iterations
-            market_type: Market type to backtest (spot or futures)
+            time_step: Time delta between backtest iterations (maps to data timeframe)
+            market_type: "spot" or "futures"; futures loop uses index OHLCV and mark for execution
         Returns:
             Results dict with PnL series and summary metrics
         """
@@ -142,6 +141,7 @@ class Backtester:
                     logger.info(f"Position Summary: {summary}")
 
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
+                
                 filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
 
                 if filtered_orders is not None:

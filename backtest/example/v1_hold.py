@@ -13,6 +13,12 @@ class HoldStrategy:
         self.lookback_days = lookback_days
 
     def run_strategy(self, oms_client: OMSClient, data_manager: HistoricalDataCollector):
+        """
+        Emit one-time LONG entries across configured symbols, then hold positions.
+
+        Returns a list of order dicts consumed by PositionManager:
+        {"symbol": str, "instrument_type": "future", "side": "LONG"}
+        """
         self.oms_client = oms_client
         self.data_manager = data_manager
         # Only buy once at the beginning, then hold
