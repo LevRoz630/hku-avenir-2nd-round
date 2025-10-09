@@ -26,7 +26,6 @@
   "value": 1234.56                      // USDT notional; PM supplies, it is possible to rewrite for the strategy to supply it as well
 }
 ```
-
  ### Data storage map
  - `HistoricalDataCollector.spot_ohlcv_data[symbol]`: spot loop and pricing source when `market_type="spot"`.
  - `HistoricalDataCollector.perpetual_index_ohlcv_data[symbol]`: futures loop timing/prices.
