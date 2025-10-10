@@ -8,7 +8,7 @@ from pathlib import Path
 from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
 from position_manager import PositionManager
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import json
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,15 @@ class Backtester:
         self.historical_data_dir = historical_data_dir
         self.portfolio_values = []
         self.returns = []
+        self.drawdowns   = []
         self.max_drawdown = 0
         self.sharpe_ratio = 0
         self.trade_history = []
         self.final_balance = 0
         self.final_positions = []
         self.position_manager = None
+        # Positions over time: list of dicts {timestamp: pd.Timestamp, exposures: {symbol: signed_notional}}
+        self.position_exposures_history = []
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
@@ -88,13 +91,13 @@ class Backtester:
         for sym in base_symbols:
             try:
                 if market_type == "spot":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False)
                 elif market_type == "futures":
                     # this is data for the backtest loop 
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
+                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False)
 
                     # this is data for price taking estiamtions when the position is opened  and risk management 
-                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
+                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False)
                 else:
                         raise ValueError(f"Invalid market type: {market_type}")
             except Exception as e:
@@ -116,13 +119,17 @@ class Backtester:
 
         aligned_start = start_date
         if earliest_ts is not None:
-            # Ensure both are comparable (convert to naive UTC if needed)
+            # Ensure start_date is timezone-aware in UTC for comparison
             s = pd.Timestamp(start_date)
             e = pd.Timestamp(earliest_ts)
             if s.tz is None:
-                s = s.tz_convert('UTC').tz_localize(None)
+                s = s.tz_localize('UTC')
+            else:
+                s = s.tz_convert('UTC')
             if e.tz is None:
-                e = e.tz_convert('UTC').tz_localize(None)
+                e = e.tz_localize('UTC')
+            else:
+                e = e.tz_convert('UTC')
             if s < e:
                 aligned_start = earliest_ts
 
@@ -170,6 +177,24 @@ class Backtester:
                             logger.error(f"Error setting target position: {e}")
                             continue
 
+                # Snapshot signed notional exposures for all symbols at this time
+                try:
+                    exposures = {}
+                    for symbol, pos in self.oms_client.positions.items():
+                        instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
+                        current_price = self.oms_client.get_current_price(symbol, instrument_type)
+                        if not current_price:
+                            continue
+                        qty = float(pos.get('quantity', 0.0))
+                        # signed notional: qty * price (SHORTs will have negative qty)
+                        exposures[symbol] = qty * current_price
+                    self.position_exposures_history.append({
+                        'timestamp': pd.Timestamp(self.oms_client.current_time),
+                        'exposures': exposures
+                    })
+                except Exception as e:
+                    logger.debug(f"Error snapshotting exposures: {e}")
+
                 # Move to next time step
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 iteration += 1
@@ -186,6 +211,7 @@ class Backtester:
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
             'returns': self.returns,
             'max_drawdown': self.max_drawdown,
+            'drawdowns': self.drawdowns,
             'sharpe_ratio': self.sharpe_ratio,
             'trade_history': self.oms_client.trade_history,
             'final_balance': self.oms_client.balance,
@@ -223,10 +249,10 @@ class Backtester:
         # Initial data load
         for sym in base_symbols:
             if market_type == "spot":
-                self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
+                self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False)
             elif market_type == "futures":
-                self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
-                self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
+                self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False)
+                self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False)
         # Snapshot starting balance to reset between permutations
         starting_balance = float(self.oms_client.balance.get('USDT', 10000.0))
         self.permutation_returns = []
@@ -290,7 +316,6 @@ class Backtester:
             self.oms_client.balance = {"USDT": starting_balance}
             self.portfolio_values = []
             self.returns = []
-
             strategy.start_time = aligned_start
             strategy.end_time = end_date
             self.position_manager = position_manager
@@ -341,6 +366,7 @@ class Backtester:
                 observed_results = {
                     'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
                     'returns': list(self.returns),
+                    'drawdowns': self.drawdowns,
                     'max_drawdown': self.max_drawdown,
                     'sharpe_ratio': self.sharpe_ratio,
                     'trade_history': list(self.oms_client.trade_history),
@@ -392,13 +418,15 @@ class Backtester:
             if prev > 0:
                 self.returns.append((curr - prev) / prev)
         
-        # Calculate max drawdown
+        # Calculate max drawdown and store drawdown series
         peak = self.portfolio_values[0]
         self.max_drawdown = 0
+        self.drawdowns = []
         for value in self.portfolio_values:
             if value > peak:
                 peak = value
             drawdown = (peak - value) / peak
+            self.drawdowns.append(drawdown)
             if drawdown > self.max_drawdown:
                 self.max_drawdown = drawdown
         
@@ -409,14 +437,90 @@ class Backtester:
             if std_return > 0:
                 self.sharpe_ratio = mean_return / std_return
     
-    def plot_results(self, results: Dict[str, Any]):
+    def plot_portfolio_value(self):
         """Plot backtest results"""
-        plt.plot(self.portfolio_values)
-        plt.title("Portfolio Value")
-        plt.xlabel("Time")
-        plt.ylabel("Portfolio Value")
-        plt.grid(True)
-        plt.show()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            y=self.portfolio_values,
+            mode='lines',
+            name='Portfolio Value',
+            line=dict(color='blue', width=2)
+        ))
+        fig.update_layout(
+            title="Portfolio Value",
+            xaxis_title="Time",
+            yaxis_title="Portfolio Value",
+            hovermode='x unified',
+            showlegend=True
+        )
+        fig.show()
+
+    def plot_drawdown(self):
+        """Plot drawdown"""
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            y=self.drawdowns,
+            mode='lines',
+            name='Drawdown',
+            line=dict(color='red', width=2)
+        ))
+        fig.update_layout(
+            title="Drawdown",
+            xaxis_title="Time",
+            yaxis_title="Drawdown",
+            hovermode='x unified',
+            showlegend=True
+        )
+        fig.show()
+
+    def plot_returns(self):
+        """Plot returns"""
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            y=self.returns,
+            mode='lines',
+            name='Returns',
+            line=dict(color='green', width=2)
+        ))
+        fig.update_layout(
+            title="Returns",
+            xaxis_title="Time",
+            yaxis_title="Returns",
+            hovermode='x unified',
+            showlegend=True
+        )
+        fig.show()
+    
+    def plot_positions(self):
+        """Plot signed notional exposures by symbol over time as a heatmap."""
+        if not self.position_exposures_history:
+            return
+        # Build DataFrame: rows=time, cols=symbols, values=signed notional
+        times = [entry['timestamp'] for entry in self.position_exposures_history]
+        all_symbols = set()
+        for entry in self.position_exposures_history:
+            all_symbols.update(entry['exposures'].keys())
+        all_symbols = sorted(list(all_symbols))
+        data = []
+        for entry in self.position_exposures_history:
+            row = [entry['exposures'].get(sym, 0.0) for sym in all_symbols]
+            data.append(row)
+        import numpy as np
+        import plotly.colors as pc
+        z = np.array(data, dtype=float)
+        fig = go.Figure(data=go.Heatmap(
+            z=z.T,
+            x=times,
+            y=all_symbols,
+            colorscale='RdBu',
+            zmid=0
+        ))
+        fig.update_layout(
+            title="Signed Notional Exposures Over Time",
+            xaxis_title="Time",
+            yaxis_title="Symbol",
+        )
+        fig.show()
 
     def save_results(self, results: Dict[str, Any], filename: str):
         """Save backtest results"""

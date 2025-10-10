@@ -39,34 +39,31 @@ def main():
     start_date = datetime.now(timezone.utc) - timedelta(days = 50)
     end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
-    # results = backtester.run_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    # )
-    
-    # backtester.print_results(results)
-
-    # # Plot results
-    # backtester.plot_results(results)
-
-    # backtester.save_results(results, "hold_strategy")
-
-
-    results = backtester.run_permutation_backtest(
+    results = backtester.run_backtest(
         strategy=strategy,
         position_manager=position_manager,
         start_date=start_date,
         end_date=end_date,
         time_step=timedelta(days = 1),
         market_type="futures",
-        permutations=10,
     )
-    print("p_value:", results.get("p_value"))
-    print("sharpes:", results.get("sharpes"))
+    
+    backtester.plot_positions(results)
+
+    backtester.save_results(results, "hold_strategy")
+
+
+    # results = backtester.run_permutation_backtest(
+    #     strategy=strategy,
+    #     position_manager=position_manager,
+    #     start_date=start_date,
+    #     end_date=end_date,
+    #     time_step=timedelta(days = 1),
+    #     market_type="futures",
+    #     permutations=10,
+    # )
+    # print("p_value:", results.get("p_value"))
+    # print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

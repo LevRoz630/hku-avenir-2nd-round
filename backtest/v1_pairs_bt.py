@@ -6,7 +6,6 @@ Run pairs trading strategy using the backtester over the last ~90 days.
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from datetime import datetime, timedelta, timezone
 import logging
 
 # Add current dir (for local strategies) and src (engine)
@@ -52,8 +51,8 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days = 180)
-    end_date = datetime.now(timezone.utc) - timedelta(days = 2)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 50)
+    end_date = datetime.now(timezone.utc) - timedelta(days = 4)
 
     position_manager = PositionManager()
     backtester = Backtester()
@@ -67,9 +66,12 @@ def main():
         time_step=timedelta(days = 1),
         market_type="futures",
     )
-    backtester.print_results(results)
-    backtester.save_results(results, "v1_pairs_bt")
-    backtester.plot_results(results)
+    # backtester.print_results(results)
+    # backtester.save_results(results, "v1_pairs_bt")
+    backtester.plot_portfolio_value()
+    backtester.plot_drawdown()
+    backtester.plot_returns()
+    backtester.plot_positions()
 
     # results = backtester.run_permutation_backtest(
     #     strategy=strategy,

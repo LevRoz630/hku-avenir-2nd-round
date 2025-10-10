@@ -170,7 +170,7 @@ class HistoricalDataCollector:
 
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                        start_date: datetime, end_date: datetime, export: bool = False, load_from_class: bool = True):
+                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = True):
         """
         Unified wrapper function to load historical data for a specific time period.
         
@@ -196,8 +196,8 @@ class HistoricalDataCollector:
             Start date and time for data collection
         end_date : datetime
             End date and time for data collection
-        export : bool, optional
-            Whether to export data to Parquet files. Default is False.
+        save_to_class : bool, optional
+            Whether to save data to class stores. Default is False.
         load_from_class : bool, optional
             Whether to load data from class stores. Default is False.
             This is used for permutations as we shuffle the data inside of the class and using load_from_cache() leads to same data being used for algo
@@ -221,12 +221,12 @@ class HistoricalDataCollector:
         >>> end_time = datetime.now()
         >>> start_time = end_time - timedelta(days=7)
         >>> spot_data = collector.load_data_period("BTC-USDT", "1h", "ohlcv_spot", 
-        ...                                        start_time, end_time, export=True)
+        ...                                        start_time, end_time, save_to_class=True)
         >>> print(spot_data.head())
         
         >>> # Collect perpetual mark price data
         >>> mark_data = collector.load_data_period("ETH-USDT", "15m", "mark_ohlcv_futures",
-        ...                                        start_time, end_time, export=True)
+        ...                                        start_time, end_time, save_to_class=True)
         >>> print(mark_data.columns)
         """
         data_types = ["ohlcv_spot", "index_ohlcv_futures", "mark_ohlcv_futures", 
@@ -278,33 +278,29 @@ class HistoricalDataCollector:
                 kind_map[data_type], symbol, start_date, end_date,
                 timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
             )
-
-            # if data is not in the class or cache, collect from network
-            if filtered_data is None or filtered_data.empty or export:
+            if filtered_data is None or filtered_data.empty:
                 logger.info(
-                    f"Cache miss: {data_type} {symbol} {timeframe}, fetching from network"
+                    f"Cache miss: {data_type} {symbol} {timeframe}, fetching from network and saving to cache"
                 )
+
                 if data_type == "mark_ohlcv_futures":
-                    self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
-                    filtered_data = self.perpetual_mark_ohlcv_data.get(symbol)
+                    filtered_data = self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date)
                 elif data_type == "index_ohlcv_futures":
-                    self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
-                    filtered_data = self.perpetual_index_ohlcv_data.get(symbol)
+                    filtered_data = self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date)
                 elif data_type == "ohlcv_spot":
-                    self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
-                    filtered_data = self.spot_ohlcv_data.get(symbol)
+                    filtered_data = self.collect_spot_ohlcv(symbol, timeframe, start_date)
                 elif data_type == "funding_rates":
-                    self.collect_funding_rates(symbol, start_date, export=export)
-                    filtered_data = self.funding_rates_data.get(symbol)
+                    filtered_data = self.collect_funding_rates(symbol, start_date)
                 elif data_type == "open_interest":
-                    self.collect_open_interest(symbol, timeframe, start_date, export=export)
-                    filtered_data = self.open_interest_data.get(symbol)
+                    filtered_data = self.collect_open_interest(symbol, timeframe, start_date)
                 elif data_type == "trades_futures":
-                    self.collect_perpetual_trades(symbol, start_date, export=export)
-                    filtered_data = self.perpetual_trades_data.get(symbol)
+                    filtered_data = self.collect_perpetual_trades(symbol, start_date)
                 else:
                     raise ValueError(f"Invalid data type: {data_type}")
         
+            if save_to_class:
+                self.kind_map[data_type][symbol] = filtered_data
+                
         except Exception as e:
             logger.error(f"Error loading data: {e} for {symbol}")
             return None
@@ -524,7 +520,7 @@ class HistoricalDataCollector:
             return None
 
     def collect_perpetual_mark_ohlcv(self, symbol: str, timeframe: str = '15m',
-                                   start_time: datetime = None, end_time: datetime | None = None, export: bool = False):
+                                   start_time: datetime = None, end_time: datetime | None = None, export: bool = True):
         """
         Collect perpetual futures mark price OHLCV data.
         
@@ -541,7 +537,7 @@ class HistoricalDataCollector:
         start_time : datetime
             Start time for data collection. Required.
         export : bool, optional
-            Whether to export data to Parquet file. Default is False.
+            Whether to export data to Parquet file. Default is True.
         
         Returns
         -------
@@ -560,7 +556,7 @@ class HistoricalDataCollector:
         >>> collector = HistoricalDataCollector()
         >>> 
         >>> start_time = datetime.now() - timedelta(days=7)
-        >>> mark_data = collector.collect_perpetual_mark_ohlcv("BTC-USDT", "1h", start_time, export=True)
+        >>> mark_data = collector.collect_perpetual_mark_ohlcv("BTC-USDT", "1h", start_time, export=False)
         >>> print(mark_data.head())
         """
 
@@ -606,14 +602,13 @@ class HistoricalDataCollector:
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
                 logger.info(f"  Saved perpetual mark OHLCV for {symbol}: {len(df):,} records to {filename}")
-            self.perpetual_mark_ohlcv_data[symbol] = df
             return df
         else:
             logger.error(f"  No perpetual mark OHLCV data collected for {symbol}")
             return None
 
     def collect_perpetual_index_ohlcv(self, symbol: str, timeframe: str = '15m',
-                                    start_time: datetime = None, end_time: datetime | None = None, export: bool = False):
+                                    start_time: datetime = None, end_time: datetime | None = None, export: bool = True):
         """
         Collect perpetual futures index price OHLCV data.
         
@@ -630,7 +625,7 @@ class HistoricalDataCollector:
         start_time : datetime
             Start time for data collection. Required.
         export : bool, optional
-            Whether to export data to Parquet file. Default is False.
+            Whether to export data to Parquet file. Default is True.
         
         Returns
         -------
@@ -649,7 +644,7 @@ class HistoricalDataCollector:
         >>> collector = HistoricalDataCollector()
         >>> 
         >>> start_time = datetime.now() - timedelta(days=7)
-        >>> index_data = collector.collect_perpetual_index_ohlcv("BTC-USDT", "1h", start_time, export=True)
+        >>> index_data = collector.collect_perpetual_index_ohlcv("BTC-USDT", "1h", start_time, export=False)
         >>> print(index_data.head())
         """
 
@@ -695,13 +690,12 @@ class HistoricalDataCollector:
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
                 logger.info(f"  Saved perpetual index OHLCV for {symbol}: {len(df):,} records to {filename}")
-            self.perpetual_index_ohlcv_data[symbol] = df
             return df
         else:
             logger.error(f"  No perpetual index OHLCV data collected for {symbol}")
             return None
 
-    def collect_funding_rates(self, symbol: str, start_time: datetime = None, export: bool = False):
+    def collect_funding_rates(self, symbol: str, start_time: datetime = None, export: bool = True):
         """
         Collect perpetual futures funding rates data.
         
@@ -715,7 +709,7 @@ class HistoricalDataCollector:
         start_time : datetime
             Start time for data collection. Required.
         export : bool, optional
-            Whether to export data to Parquet file. Default is False.
+            Whether to export data to Parquet file. Default is True.
         
         Returns
         -------
@@ -734,7 +728,7 @@ class HistoricalDataCollector:
         >>> collector = HistoricalDataCollector()
         >>> 
         >>> start_time = datetime.now() - timedelta(days=7)
-        >>> funding_data = collector.collect_funding_rates("BTC-USDT", start_time, export=True)
+        >>> funding_data = collector.collect_funding_rates("BTC-USDT", start_time, export=False)
         >>> print(funding_data.head())
         """
 
@@ -793,7 +787,6 @@ class HistoricalDataCollector:
                 if export:
                     df.to_parquet(self.data_dir / filename, index=False)
                     logger.info(f"  Saved funding rates for {symbol}: {len(df):,} records to {filename}")
-                self.funding_rates_data[symbol] = df
                 return df
             else:
                 logger.error(f"  No funding rate data for {symbol}")
@@ -804,7 +797,7 @@ class HistoricalDataCollector:
             return None
 
     def collect_open_interest(self, symbol: str, timeframe: str = '15m',
-                            start_time: datetime = None, export: bool = False):
+                            start_time: datetime = None, export: bool = True):
         """
         Collect perpetual futures open interest data.
         
@@ -821,7 +814,7 @@ class HistoricalDataCollector:
         start_time : datetime
             Start time for data collection. Required.
         export : bool, optional
-            Whether to export data to Parquet file. Default is False.
+            Whether to export data to Parquet file. Default is True.
         
         Returns
         -------
@@ -840,7 +833,7 @@ class HistoricalDataCollector:
         >>> collector = HistoricalDataCollector()
         >>> 
         >>> start_time = datetime.now() - timedelta(days=7)
-        >>> oi_data = collector.collect_open_interest("BTC-USDT", "1h", start_time, export=True)
+        >>> oi_data = collector.collect_open_interest("BTC-USDT", "1h", start_time, export=False)
         >>> print(oi_data.head())
         """
 
@@ -898,13 +891,12 @@ class HistoricalDataCollector:
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
                 logger.info(f"  Saved open interest for {symbol}: {len(df):,} records to {filename}")
-            self.open_interest_data[symbol] = df
             return df
         else:
             logger.error(f"  No open interest data for {symbol}")
             return None
 
-    def collect_perpetual_trades(self, symbol: str, start_time: datetime = None, export: bool = False):
+    def collect_perpetual_trades(self, symbol: str, start_time: datetime = None, export: bool = True):
         """
         Collect perpetual futures trades data.
         
@@ -918,7 +910,7 @@ class HistoricalDataCollector:
         start_time : datetime
             Start time for data collection. Required.
         export : bool, optional
-            Whether to export data to Parquet file. Default is False.
+            Whether to export data to Parquet file. Default is True.
         
         Returns
         -------
@@ -937,7 +929,7 @@ class HistoricalDataCollector:
         >>> collector = HistoricalDataCollector()
         >>> 
         >>> start_time = datetime.now() - timedelta(days=7)
-        >>> trades_data = collector.collect_perpetual_trades("BTC-USDT", start_time, export=True)
+        >>> trades_data = collector.collect_perpetual_trades("BTC-USDT", start_time, export=False)
         >>> print(trades_data.head())
         """
 
