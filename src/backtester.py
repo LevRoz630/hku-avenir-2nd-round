@@ -98,7 +98,7 @@ class Backtester:
                 else:
                         raise ValueError(f"Invalid market type: {market_type}")
             except Exception as e:
-                logger.error(f"Error loading data: {e} for {sym}")
+                logger.error(f"Error loading data: {e} for {sym} for market type {market_type}")
                 continue
 
         # Align start time to earliest available data so prices exist at t0
@@ -222,18 +222,11 @@ class Backtester:
 
         # Initial data load
         for sym in base_symbols:
-            try:
-                if market_type == "spot":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
-                elif market_type == "futures":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
-                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
-                else:
-                    raise ValueError(f"Invalid market type: {market_type}")
-            except Exception as e:
-                logger.error(f"Error loading data: {e} for {sym}")
-                continue
-
+            if market_type == "spot":
+                self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, export=True, load_from_class=False)
+            elif market_type == "futures":
+                self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
+                self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, export=True, load_from_class=False)
         # Snapshot starting balance to reset between permutations
         starting_balance = float(self.oms_client.balance.get('USDT', 10000.0))
         self.permutation_returns = []

@@ -167,6 +167,162 @@ class HistoricalDataCollector:
         pattern = patterns[kind]
         return sorted(self.data_dir.glob(pattern))
 
+
+
+    def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
+                        start_date: datetime, end_date: datetime, export: bool = False, load_from_class: bool = True):
+        """
+        Unified wrapper function to load historical data for a specific time period.
+        
+        This is the main entry point for collecting historical data. It automatically
+        determines the appropriate collection method based on the data type and handles
+        all the complexity of data collection, caching, and filtering.
+        
+        Parameters
+        ----------
+        symbol : str
+            Trading symbol (e.g., "BTC-USDT", "ETH-USDT")
+        timeframe : str
+            Timeframe for OHLCV data. Supported: '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d'
+        data_type : str
+            Type of data to collect. Supported types:
+            - "ohlcv_spot": Spot market OHLCV data
+            - "index_ohlcv_futures": Perpetual futures index price OHLCV data
+            - "mark_ohlcv_futures": Perpetual futures mark price OHLCV data
+            - "funding_rates": Perpetual futures funding rates
+            - "open_interest": Perpetual futures open interest
+            - "trades_futures": Perpetual futures trades data
+        start_date : datetime
+            Start date and time for data collection
+        end_date : datetime
+            End date and time for data collection
+        export : bool, optional
+            Whether to export data to Parquet files. Default is False.
+        load_from_class : bool, optional
+            Whether to load data from class stores. Default is False.
+            This is used for permutations as we shuffle the data inside of the class and using load_from_cache() leads to same data being used for algo
+        
+        Returns
+        -------
+        pandas.DataFrame
+            Filtered historical data for the specified time period
+            
+        Raises
+        ------
+        ValueError
+            If start_date or end_date is None, or if start_date > end_date, or if data_type is invalid
+        
+        Examples
+        --------
+        >>> from datetime import datetime, timedelta
+        >>> collector = HistoricalDataCollector()
+        >>> 
+        >>> # Collect spot OHLCV data
+        >>> end_time = datetime.now()
+        >>> start_time = end_time - timedelta(days=7)
+        >>> spot_data = collector.load_data_period("BTC-USDT", "1h", "ohlcv_spot", 
+        ...                                        start_time, end_time, export=True)
+        >>> print(spot_data.head())
+        
+        >>> # Collect perpetual mark price data
+        >>> mark_data = collector.load_data_period("ETH-USDT", "15m", "mark_ohlcv_futures",
+        ...                                        start_time, end_time, export=True)
+        >>> print(mark_data.columns)
+        """
+        data_types = ["ohlcv_spot", "index_ohlcv_futures", "mark_ohlcv_futures", 
+                     "funding_rates", "open_interest", "trades_futures"]
+        
+        if start_date is None or end_date is None:
+            raise ValueError("Start and end dates are required")
+
+        if start_date > end_date:
+            raise ValueError("Start date must be before end date")
+        
+        # check if start_date and end_date are in UTC timezone
+        _is_utc(start_date)
+        _is_utc(end_date)
+
+        # Align to timeframe boundaries to avoid ms drift affecting cache hits
+        minutes = _get_timeframe_to_minutes(timeframe)
+        def _floor_to_tf(dt: datetime) -> datetime:
+            # Floor to nearest timeframe boundary in UTC
+            epoch_minutes = int((dt - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds() // 60)
+            floored_minutes = (epoch_minutes // minutes) * minutes
+            return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=floored_minutes)
+        start_date = _floor_to_tf(start_date)
+        # Make end inclusive by flooring as well; users expect stable end
+        end_date = _floor_to_tf(end_date)
+
+        if data_type not in data_types:
+            raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
+        
+
+        
+        
+        # Cache-first, then collect
+        kind_map = {
+            'ohlcv_spot': 'ohlcv_spot',
+            'mark_ohlcv_futures': 'mark_ohlcv_futures',
+            'index_ohlcv_futures': 'index_ohlcv_futures',
+            'funding_rates': 'funding_rates',
+            'open_interest': 'open_interest',
+            'trades_futures': 'trades_futures',
+        }
+        try:
+            if load_from_class:
+                filtered_data = self.load_from_class(
+                    kind_map[data_type], symbol, start_date, end_date
+                )
+            else:
+                filtered_data = self.load_cached_window(
+                kind_map[data_type], symbol, start_date, end_date,
+                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+            )
+
+            # if data is not in the class or cache, collect from network
+            if filtered_data is None or filtered_data.empty or export:
+                logger.info(
+                    f"Cache miss: {data_type} {symbol} {timeframe} "
+                    f"[{pd.Timestamp(start_date)} -> {pd.Timestamp(end_date)}], fetching from network"
+                )
+                if data_type == "mark_ohlcv_futures":
+                    self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.perpetual_mark_ohlcv_data.get(symbol)
+                elif data_type == "index_ohlcv_futures":
+                    self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.perpetual_index_ohlcv_data.get(symbol)
+                elif data_type == "ohlcv_spot":
+                    self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.spot_ohlcv_data.get(symbol)
+                elif data_type == "funding_rates":
+                    self.collect_funding_rates(symbol, start_date, export=export)
+                    filtered_data = self.funding_rates_data.get(symbol)
+                elif data_type == "open_interest":
+                    self.collect_open_interest(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.open_interest_data.get(symbol)
+                elif data_type == "trades_futures":
+                    self.collect_perpetual_trades(symbol, start_date, export=export)
+                    filtered_data = self.perpetual_trades_data.get(symbol)
+                else:
+                    raise ValueError(f"Invalid data type: {data_type}")
+        
+        except Exception as e:
+            logger.error(f"Error loading data: {e} for {symbol}")
+            return None
+        # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
+        if not pd.api.types.is_datetime64_any_dtype(filtered_data["timestamp"]):
+            filtered_data["timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
+        else:
+            ts = filtered_data["timestamp"]
+            if ts.dt.tz is None:
+                filtered_data["timestamp"] = ts.dt.tz_localize('UTC')
+            else:
+                filtered_data["timestamp"] = ts.dt.tz_convert('UTC')
+        
+        # Filter data to the requested time period (start_date/end_date already UTC)
+        filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
+        return filtered_data
+
     def load_from_class(self, kind: str, symbol: str, start_date, end_date):
         """Load data from class structures
         Returns a slice of the data between start_date and end_date
@@ -182,7 +338,7 @@ class HistoricalDataCollector:
             else:
                 raise ValueError(f"Invalid kind: {kind}")
             
-            if df.empty:
+            if df is None:
                 raise Exception(f"No data for {symbol} {kind} found in class structure")
                 return None
 
@@ -205,8 +361,7 @@ class HistoricalDataCollector:
             logger.warning(f"Error loading data from class: {e}")
             return None
 
-    
-    def load_from_cache(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
+    def load_cached_window(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
         """Return cached parquet data sliced to [start_date, end_date] if available, else None."""
         files = self._cache_glob(kind, symbol, timeframe)
         if not files:
@@ -240,7 +395,7 @@ class HistoricalDataCollector:
                     df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
                 ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
                 if ts_max < s or ts_min > e:
-                    logger.error(f"Smething really weird happened and the data that cache spotted doesn't actually have start and end date")
+                    continue
                 sliced = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
                 if sliced.empty:
                     continue
@@ -255,181 +410,6 @@ class HistoricalDataCollector:
             return None
             
         return out.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-
-    def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                            start_date: datetime, end_date: datetime, export: bool = False, load_from_class: bool = True):
-        """
-        Unified wrapper function to load historical data for a specific time period.
-        
-        This is the main entry point for collecting historical data. It automatically
-        determines the appropriate collection method based on the data type and handles
-        all the complexity of data collection, caching, and filtering.
-        
-        Parameters
-        ----------
-        symbol : str
-            Trading symbol (e.g., "BTC-USDT", "ETH-USDT")
-        timeframe : str
-            Timeframe for OHLCV data. Supported: '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d'
-        data_type : str
-            Type of data to collect. Supported types:
-            - "ohlcv_spot": Spot market OHLCV data
-            - "index_ohlcv_futures": Perpetual futures index price OHLCV data
-            - "mark_ohlcv_futures": Perpetual futures mark price OHLCV data
-            - "funding_rates": Perpetual futures funding rates
-            - "open_interest": Perpetual futures open interest
-            - "trades_futures": Perpetual futures trades data
-        start_date : datetime
-            Start date and time for data collection
-        end_date : datetime
-            End date and time for data collection
-        export : bool, optional
-            Whether to export data to Parquet files and write to class structures. Default is False.
-        load_from_class : bool, optional
-            Whether to load data from class structures. Default is True.
-            If False, data is read from cache, TRUE FOR PERMUTATIONS.
-        Returns
-        -------
-        pandas.DataFrame
-            Filtered historical data for the specified time period
-            
-        Raises
-        ------
-        ValueError
-            If start_date or end_date is None, or if start_date > end_date, or if data_type is invalid
-        
-        Examples
-        --------
-        >>> from datetime import datetime, timedelta
-        >>> collector = HistoricalDataCollector()
-        >>> 
-        >>> # Collect spot OHLCV data
-        >>> end_time = datetime.now()
-        >>> start_time = end_time - timedelta(days=7)
-        >>> spot_data = collector.load_data_period("BTC-USDT", "1h", "ohlcv_spot", 
-        ...                                        start_time, end_time, export=True)
-        >>> print(spot_data.head())
-        
-        >>> # Collect perpetual mark price data
-        >>> mark_data = collector.load_data_period("ETH-USDT", "15m", "mark_ohlcv_futures",
-        ...                                        start_time, end_time, export=True)
-        >>> print(mark_data.columns)
-        """
-
-        data_types = ["ohlcv_spot", "index_ohlcv_futures", "mark_ohlcv_futures", 
-                     "funding_rates", "open_interest", "trades_futures"]
-        
-        if start_date is None or end_date is None:
-            raise ValueError("Start and end dates are required")
-
-        if start_date > end_date:
-            raise ValueError("Start date must be before end date")
-        
-        # check if start_date and end_date are in UTC timezone
-        _is_utc(start_date)
-        _is_utc(end_date)
-
-        # Align to timeframe boundaries to avoid ms drift affecting cache hits
-        minutes = _get_timeframe_to_minutes(timeframe)
-        def _floor_to_tf(dt: datetime) -> datetime:
-            # Floor to nearest timeframe boundary in UTC
-            epoch_minutes = int((dt - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds() // 60)
-            floored_minutes = (epoch_minutes // minutes) * minutes
-            return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=floored_minutes)
-        start_date = _floor_to_tf(start_date)
-        # Make end inclusive by flooring as well; users expect stable end
-        end_date = _floor_to_tf(end_date)
-
-        if data_type not in data_types:
-            raise ValueError(f"Invalid data type: {data_type}. Supported types: {data_types}")
-        
-        # Cache-first, then collect
-        kind_map = {
-            'ohlcv_spot': 'ohlcv_spot',
-            'mark_ohlcv_futures': 'mark_ohlcv_futures',
-            'index_ohlcv_futures': 'index_ohlcv_futures',
-            'funding_rates': 'funding_rates',
-            'open_interest': 'open_interest',
-            'trades_futures': 'trades_futures',
-        }
-        if load_from_class:
-            cached = self.load_from_class(
-                kind_map[data_type], symbol, start_date, end_date
-                if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
-            )
-            filtered_data = cached
-            if cached is None:
-                logger.info(f"No data found for {symbol} {data_type} {timeframe}, fetching from network")
-                
-        else:
-            cached = self.load_from_cache(
-                kind_map[data_type], symbol, start_date, end_date
-                if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
-            )
-            filtered_data = cached
-
-        if cached is not None and export:
-            # Populate in-memory store so downstream readers (e.g., OMS) can source prices
-            if data_type == 'ohlcv_spot':
-                self.spot_ohlcv_data[symbol] = cached
-            elif data_type == 'mark_ohlcv_futures':
-                self.perpetual_mark_ohlcv_data[symbol] = cached
-            elif data_type == 'index_ohlcv_futures':
-                self.perpetual_index_ohlcv_data[symbol] = cached
-            elif data_type == 'funding_rates':
-                self.funding_rates_data[symbol] = cached
-            elif data_type == 'open_interest':
-                self.open_interest_data[symbol] = cached
-            elif data_type == 'trades_futures':
-                self.perpetual_trades_data[symbol] = cached
-            filtered_data = cached
-
-        if cached is None and export:
-            logger.info(
-                f"Cache miss: {data_type} {symbol} {timeframe} "
-                f"[{pd.Timestamp(start_date)} -> {pd.Timestamp(end_date)}], fetching from network"
-            )
-            if data_type == "mark_ohlcv_futures":
-                self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
-                filtered_data = self.perpetual_mark_ohlcv_data.get(symbol)
-            elif data_type == "index_ohlcv_futures":
-                self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
-                filtered_data = self.perpetual_index_ohlcv_data.get(symbol)
-            elif data_type == "ohlcv_spot":
-                self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
-                filtered_data = self.spot_ohlcv_data.get(symbol)
-            elif data_type == "funding_rates":
-                self.collect_funding_rates(symbol, start_date, export=export)
-                filtered_data = self.funding_rates_data.get(symbol)
-            elif data_type == "open_interest":
-                self.collect_open_interest(symbol, timeframe, start_date, export=export)
-                filtered_data = self.open_interest_data.get(symbol)
-            elif data_type == "trades_futures":
-                self.collect_perpetual_trades(symbol, start_date, export=export)
-                filtered_data = self.perpetual_trades_data.get(symbol)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-        if filtered_data is None:
-            raise ValueError(f"Something went really wrong and we couldn't load the data")
-
-        # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
-        # Ensure we operate on a copy to avoid SettingWithCopyWarning if upstream provided a view
-        filtered_data = filtered_data.copy()
-        if not pd.api.types.is_datetime64_any_dtype(filtered_data["timestamp"]):
-            filtered_data["timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
-        else:
-            ts = filtered_data["timestamp"]
-            if ts.dt.tz is None:
-                filtered_data["timestamp"] = ts.dt.tz_localize('UTC')
-            else:
-                filtered_data["timestamp"] = ts.dt.tz_convert('UTC')
-        
-        # Filter data to the requested time period (start_date/end_date already UTC)
-        filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
-        return filtered_data
-
-
     async def load_data_live(self, symbol: str, data_type: str):
         try:
             # Normalize symbols like "btc-usdt-perp" or "btc-usdt" to "BTC/USDT"
