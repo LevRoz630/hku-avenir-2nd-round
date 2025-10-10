@@ -71,8 +71,7 @@ class PositionManager:
                     self.oms_client.current_time - timedelta(hours=4),
                     self.oms_client.current_time,
                 )
-                print("symbol: ", order['symbol'])
-                print("base_symbol: ", base_symbol)
+                
                 if data is None or len(data) == 0:
                     cleaned.append(order)
                     continue

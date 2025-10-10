@@ -282,8 +282,7 @@ class HistoricalDataCollector:
             # if data is not in the class or cache, collect from network
             if filtered_data is None or filtered_data.empty or export:
                 logger.info(
-                    f"Cache miss: {data_type} {symbol} {timeframe} "
-                    f"[{pd.Timestamp(start_date)} -> {pd.Timestamp(end_date)}], fetching from network"
+                    f"Cache miss: {data_type} {symbol} {timeframe}, fetching from network"
                 )
                 if data_type == "mark_ohlcv_futures":
                     self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)

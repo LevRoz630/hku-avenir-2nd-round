@@ -52,8 +52,6 @@ class PairTradingStrategy:
         window_start = self.oms_client.current_time - pd.Timedelta(days=window_days)
         end_for_load = self.oms_client.current_time
 
-        print("this is where the data is being loaded for strat")
-
         df = dm.load_data_period(base_symbol, 
                                 timeframe='15m', 
                                 data_type='index_ohlcv_futures', 
