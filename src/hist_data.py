@@ -111,6 +111,15 @@ class HistoricalDataCollector:
         self.perpetual_trades_data = {}
         self.funding_rates_data = {}
         self.open_interest_data = {}
+        # Unified in-memory stores keyed by data_type for load/save convenience
+        self.kind_map = {
+            'ohlcv_spot': self.spot_ohlcv_data,
+            'mark_ohlcv_futures': self.perpetual_mark_ohlcv_data,
+            'index_ohlcv_futures': self.perpetual_index_ohlcv_data,
+            'funding_rates': self.funding_rates_data,
+            'open_interest': self.open_interest_data,
+            'trades_futures': self.perpetual_trades_data,
+        }
         
         try:
             # Initialize historical data exchanges (REST API)

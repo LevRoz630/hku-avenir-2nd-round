@@ -141,6 +141,9 @@ class Backtester:
         self.oms_client.set_current_time(strategy.start_time)
         self.oms_client.set_data_manager(self.data_manager)
 
+        # Reset per-run histories
+        self.position_exposures_history = []
+
         # Run backtest
         iteration = 0
 
