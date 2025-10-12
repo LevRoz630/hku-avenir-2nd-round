@@ -211,9 +211,9 @@ class BTCAltShortStrategy:
         if not altcoin_weights:
             print("No altcoins with negative returns. Closing all positions.")
             # Close all positions
-            orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
+            orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'side': 'CLOSE'})
             for alt_sym in self.altcoin_symbols:
-                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
             return
         
         print(f"\nAltcoin weights (filtered >10%):")
@@ -227,30 +227,30 @@ class BTCAltShortStrategy:
         print(f"  BTC long: ${self.current_btc_ratio:.2f}")
         print(f"  Alt short: ${1.0 - self.current_btc_ratio:.2f}")
         
-        # Place BTC long position
+        # adds the position with the alloc_frac that is later used by position manager to set the value
         orders.append({
             'symbol': self.btc_symbol, 
             'instrument_type': 'future', 
-            'value': self.current_btc_ratio, 
+            'alloc_frac': self.current_btc_ratio, 
             'side': 'LONG'
         })
         
-        # Place altcoin short positions
+        # adds the position with the alloc_frac that is later used by position manager to set the value
         for alt_sym, weight in altcoin_weights.items():
 
             orders.append({
                 'symbol': alt_sym, 
                 'instrument_type': 'future', 
-                'value': (1.0 - self.current_btc_ratio) * weight, 
+                'alloc_frac': (1.0 - self.current_btc_ratio) * weight, 
                 'side': 'SHORT'
             })
         
-        # Close positions for altcoins not in current portfolio
+        # closes the positions for altcoins not in the current portfolio
         for alt_sym in self.altcoin_symbols:
             if alt_sym not in altcoin_weights:
-                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
         
-        # Update state
+        # updates the state
         self.last_rebalance_day = current_day
         
         print(f"\nRebalance complete at {now}")

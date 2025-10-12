@@ -19,20 +19,20 @@ class PositionManager:
         self.oms_client = oms_client
         self.data_manager = data_manager
 
-    def red_button(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _red_button(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Red button to close positions due to n% loss.
         """
         current_positions = self.oms_client.get_position()
 
         for position in current_positions:
-            # close if the coin drops by more than 5% since we bought
-            if position['pnl'] < (0.05 * -position['entry_price']):
+            # checks if we lost more than 5% on a position (short or long)
+            if  position['value'] < 0.95*position['entry_price']*position['quantity']:
                 logger.info(f"Closing position {position['symbol']} due to large loss of {position['pnl']}")
-                orders.append({'symbol': position['symbol'], 'instrument_type': position['instrument_type'], 'side': 'CLOSE', 'value': 0.0})
+                orders.append({'symbol': position['symbol'], 'instrument_type': position['instrument_type'], 'side': 'CLOSE'})
         
 
-    def prioritize_close_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _prioritize_close_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         by_symbol = {}
         for o in orders:
             sym = o.get('symbol')
@@ -47,12 +47,13 @@ class PositionManager:
 
     def _set_weights(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for order in orders:
+            order['value'] = self.max_alloc_frac * order['alloc_frac']
             
     
     def filter_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        orders = self.red_button(orders)
+        orders = self._red_button(orders)
         orders = self._set_weights(orders)
-        orders = self.prioritize_close_orders(orders)
+        orders = self._prioritize_close_orders(orders)
 
 
         if orders is None:

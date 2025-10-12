@@ -221,11 +221,10 @@ class OMSClient:
         return pnl, principal
 
 
-    def get_total_portfolio_value(self) -> float:
-        """Get total portfolio value including balances and appropriate position valuation.
-
-        - Spot: add current notional value of holdings
-        - Futures: add unrealized PnL only (no principal counted)
+    def update_portfolio_value(self) -> float:
+        """
+        Update and return total portfolio value including balances and appropriate position valuation.
+        
         """
         total_value = self.balance
 
@@ -261,7 +260,7 @@ class OMSClient:
         summary = {
             'balances': self.balance,
             'positions': {},
-            'total_portfolio_value': self.get_total_portfolio_value(),
+            'total_portfolio_value': self.update_portfolio_value(),
             'total_trades': len(self.trade_history)
         }
         

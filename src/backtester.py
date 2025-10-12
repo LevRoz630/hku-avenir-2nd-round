@@ -153,7 +153,7 @@ class Backtester:
         while self.oms_client.current_time <= end_date:
             try:
                 # Revalue portfolio at the current timestamp
-                total_value = self.oms_client.get_total_portfolio_value()
+                total_value = self.oms_client.update_portfolio_value()
                 self.portfolio_values.append(total_value)
                 logger.info(f"Total Portfolio Value: {total_value}")
                 # Pretty-print balances and positions
@@ -337,7 +337,7 @@ class Backtester:
 
             while self.oms_client.current_time <= end_date:
                 try:
-                    total_value = self.oms_client.get_total_portfolio_value()
+                    total_value = self.oms_client.update_portfolio_value()
                     self.portfolio_values.append(total_value)
                     try:
                         positions_tbl = format_positions_table(self.oms_client.get_position())
