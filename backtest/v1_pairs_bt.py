@@ -12,7 +12,7 @@ import logging
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from position_managers.position_manager import PositionManager
+from position_managers.example import PositionManager
 from backtester import Backtester
 from strategies.v1_pairs import PairTradingStrategy, set_pairs_config
 # from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4

@@ -12,7 +12,7 @@ import logging
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from position_managers.position_manager import PositionManager
+from position_managers.v1_ls_pm import PositionManager
 from backtester import Backtester
 from strategies.v1_ls import BTCAltShortStrategy
 # from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
@@ -47,7 +47,6 @@ def main():
     backtester.plot_portfolio_value()
     backtester.plot_drawdown()
     backtester.plot_returns()
-    backtester.plot_positions()
     # backtester.print_results(results)
     backtester.save_results(results, "v1_ls_bt")
 

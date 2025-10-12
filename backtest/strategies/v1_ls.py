@@ -191,7 +191,6 @@ class BTCAltShortStrategy:
         """Execute strategy logic."""
         orders = []
         now = self.oms_client.current_time
-        total_equity = float(self.oms_client.get_total_portfolio_value() or 10000.0)
         
         # Check if we should rebalance (once per day)
         current_day = (now.year, now.month, now.day)
@@ -212,9 +211,9 @@ class BTCAltShortStrategy:
         if not altcoin_weights:
             print("No altcoins with negative returns. Closing all positions.")
             # Close all positions
-            orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'side': 'CLOSE'})
+            orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
             for alt_sym in self.altcoin_symbols:
-                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
             return
         
         print(f"\nAltcoin weights (filtered >10%):")
@@ -223,42 +222,33 @@ class BTCAltShortStrategy:
             log_ret = self._calculate_log_returns(base)
             print(f"  {sym}: {weight:.2%} (24h log return: {log_ret:.4f})")
         
-        # Allocate capital: use leverage carefully
-        # Total allocation = 90% of equity (keep 10% buffer) could be a param 
-        total_allocation = 0.9 * total_equity
-        
-        # Tweaked in the params
-        btc_allocation = self.current_btc_ratio * total_allocation
-        alt_allocation = (1.0 - self.current_btc_ratio) * total_allocation
-        
         print(f"\nAllocation:")
-        print(f"  Total equity: ${total_equity:.2f}")
-        print(f"  BTC long: ${btc_allocation:.2f} ({self.current_btc_ratio:.1%})")
-        print(f"  Alt short: ${alt_allocation:.2f} ({1.0 - self.current_btc_ratio:.1%})")
+        
+        print(f"  BTC long: ${self.current_btc_ratio:.2f}")
+        print(f"  Alt short: ${1.0 - self.current_btc_ratio:.2f}")
         
         # Place BTC long position
         orders.append({
             'symbol': self.btc_symbol, 
             'instrument_type': 'future', 
-            'value': btc_allocation, 
+            'value': self.current_btc_ratio, 
             'side': 'LONG'
         })
         
         # Place altcoin short positions
         for alt_sym, weight in altcoin_weights.items():
-            alt_usdt = alt_allocation * weight
 
             orders.append({
                 'symbol': alt_sym, 
                 'instrument_type': 'future', 
-                'value': alt_usdt, 
+                'value': (1.0 - self.current_btc_ratio) * weight, 
                 'side': 'SHORT'
             })
         
         # Close positions for altcoins not in current portfolio
         for alt_sym in self.altcoin_symbols:
             if alt_sym not in altcoin_weights:
-                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'value': 0.0, 'side': 'CLOSE'})
         
         # Update state
         self.last_rebalance_day = current_day
