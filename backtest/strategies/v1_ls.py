@@ -189,6 +189,7 @@ class BTCAltShortStrategy:
     
     def run_strategy(self):
         """Execute strategy logic."""
+        orders = []
         now = self.oms_client.current_time
         total_equity = float(self.oms_client.get_total_portfolio_value() or 10000.0)
         
@@ -211,9 +212,9 @@ class BTCAltShortStrategy:
         if not altcoin_weights:
             print("No altcoins with negative returns. Closing all positions.")
             # Close all positions
-            self.oms_client.set_target_position(self.btc_symbol, 'future', 0.0, 'CLOSE')
+            orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'side': 'CLOSE'})
             for alt_sym in self.altcoin_symbols:
-                self.oms_client.set_target_position(alt_sym, 'future', 0.0, 'CLOSE')
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
             return
         
         print(f"\nAltcoin weights (filtered >10%):")
@@ -236,30 +237,32 @@ class BTCAltShortStrategy:
         print(f"  Alt short: ${alt_allocation:.2f} ({1.0 - self.current_btc_ratio:.1%})")
         
         # Place BTC long position
-        self.oms_client.set_target_position(
-            self.btc_symbol, 
-            'future', 
-            btc_allocation, 
-            'LONG'
-        )
+        orders.append({
+            'symbol': self.btc_symbol, 
+            'instrument_type': 'future', 
+            'value': btc_allocation, 
+            'side': 'LONG'
+        })
         
         # Place altcoin short positions
         for alt_sym, weight in altcoin_weights.items():
             alt_usdt = alt_allocation * weight
-            self.oms_client.set_target_position(
-                alt_sym,
-                'future',
-                alt_usdt,
-                'SHORT'
-            )
+
+            orders.append({
+                'symbol': alt_sym, 
+                'instrument_type': 'future', 
+                'value': alt_usdt, 
+                'side': 'SHORT'
+            })
         
         # Close positions for altcoins not in current portfolio
         for alt_sym in self.altcoin_symbols:
             if alt_sym not in altcoin_weights:
-                self.oms_client.set_target_position(alt_sym, 'future', 0.0, 'CLOSE')
+                orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
         
         # Update state
         self.last_rebalance_day = current_day
         
         print(f"\nRebalance complete at {now}")
         print(f"{'='*60}\n")
+        return orders
