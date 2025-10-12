@@ -31,7 +31,7 @@ class OMSClient:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
-        self.balance = {"USDT": 10000.0}  # Balance for trading
+        self.balance = 10000.0  # Balance for trading
         self.trade_history = []  # All trades executed
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
@@ -104,8 +104,8 @@ class OMSClient:
 
         # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
-        if trade_value > self.balance['USDT']:
-            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
+        if trade_value > self.balance:
+            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance}")
 
         # Convert USDT → base-asset quantity at current mark/index price
         trade_qty = trade_value / current_price
@@ -124,17 +124,11 @@ class OMSClient:
         current_side = pos.get('side', 'LONG')
         current_entry_price = float(pos.get('entry_price', 0.0))
 
-        # Futures vs spot cash semantics
-        is_future = (instrument_type == 'future')
-
         # Handle explicit close before side comparisons to avoid misrouting CLOSE
         if position_side == 'CLOSE':
             # Explicit close: realize PnL and zero out the position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance['USDT'] += (pnl or 0.0)
-            # Only restore principal for spot; futures do not move principal
-            if not is_future:
-                self.balance['USDT'] += (principal or 0.0)
+            self.balance += (pnl or 0.0) + (principal or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
                 'quantity': 0.0,
@@ -147,9 +141,7 @@ class OMSClient:
 
         elif position_side == current_side:
             # Add to an existing position on the same side, update VWAP entry_price
-            # For futures, do not subtract principal from cash
-            if not is_future:
-                self.balance['USDT'] -= trade_value
+            self.balance -= trade_value
             new_qty = current_quantity + trade_qty
             self.positions[symbol] = {
                 'quantity': new_qty,
@@ -165,11 +157,8 @@ class OMSClient:
         elif position_side != current_side:
             # Flip side: realize PnL on the old side, then open a fresh position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance['USDT'] += (pnl or 0.0)
-            # Only restore and re-spend principal for spot
-            if not is_future:
-                self.balance['USDT'] += (principal or 0.0)
-                self.balance['USDT'] -= trade_value
+            self.balance += (pnl or 0.0) + (principal or 0.0)
+            self.balance -= trade_value
             self.positions[symbol] = {
                 'quantity': trade_qty,
                 'value': abs(trade_qty) * current_price,
@@ -190,7 +179,7 @@ class OMSClient:
             'quantity': self.positions[symbol]['quantity'] ,
             'value': self.positions[symbol]['value'] ,
             'price': self.positions[symbol]['entry_price'],
-            'balance_after': self.balance.copy()
+            'balance_after': self.balance
         })
         
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
@@ -238,7 +227,7 @@ class OMSClient:
         - Spot: add current notional value of holdings
         - Futures: add unrealized PnL only (no principal counted)
         """
-        total_value = self.balance.get('USDT', 0.0)
+        total_value = self.balance
 
         for symbol, pos in self.positions.items():
             instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
@@ -270,7 +259,7 @@ class OMSClient:
     def get_position_summary(self) -> Dict[str, Any]:
         """Get a summary of all positions and balances"""
         summary = {
-            'balances': self.balance.copy(),
+            'balances': self.balance,
             'positions': {},
             'total_portfolio_value': self.get_total_portfolio_value(),
             'total_trades': len(self.trade_history)

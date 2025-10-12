@@ -71,6 +71,9 @@ class Backtester:
         """
         try:
             self.position_manager = position_manager
+
+
+
             symbols = strategy.symbols
             # Ensure historical data exists for requested symbols; download if missing
             data_path = Path(self.historical_data_dir)
@@ -164,8 +167,10 @@ class Backtester:
                     logger.info(f"Position Summary: {summary}")
 
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
-                
-                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
+
+                # Sync the position manager with the oms and data manager so it would have the most up to date information
+                self.position_manager.oms_and_dm(self.oms_client, self.data_manager)
+                filtered_orders = self.position_manager.filter_orders(orders=orders)
 
                 if filtered_orders is not None:
                     for order in filtered_orders:
