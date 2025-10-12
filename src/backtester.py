@@ -32,6 +32,7 @@ class Backtester:
         self.drawdowns   = []
         self.max_drawdown = 0
         self.sharpe_ratio = 0
+        self.sortino_ratio = 0
         self.trade_history = []
         self.final_balance = 0
         self.final_positions = []
@@ -375,6 +376,7 @@ class Backtester:
                     'drawdowns': self.drawdowns,
                     'max_drawdown': self.max_drawdown,
                     'sharpe_ratio': self.sharpe_ratio,
+                    'sortino_ratio': self.sortino_ratio,
                     'trade_history': list(self.oms_client.trade_history),
                     'final_balance': dict(self.oms_client.balance),
                     'final_positions': self.oms_client.get_position()
@@ -390,12 +392,25 @@ class Backtester:
                 sigma = np.nanstd(arr, ddof=1)
                 return mu / sigma if sigma > 0 and np.isfinite(mu) else np.nan
 
+            def _sortino(arr: np.ndarray) -> float:
+                arr = np.asarray(arr, dtype=float)
+                if arr.size == 0:
+                    return np.nan
+                mu = np.nanmean(arr)
+                sigma = np.nanstd(arr, ddof=1)
+                downside_risk = np.nanmean(np.where(arr < 0, arr, 0))
+                return mu / downside_risk if downside_risk > 0 and np.isfinite(mu) else np.nan
+
             T_obs = _sharpe(self.permutation_returns[0])
             sharpe_list = []
+            sortino_list = []
             for r in self.permutation_returns:
                 s = _sharpe(r)
                 if np.isfinite(s):
                     sharpe_list.append(s)
+                s = _sortino(r)
+                if np.isfinite(s):
+                    sortino_list.append(s)
             sharpes = np.array(sharpe_list, dtype=float)
             B = sharpes.size
             p_value = (1 + np.sum(sharpes >= T_obs)) / (B + 1) if B > 0 and np.isfinite(T_obs) else np.nan
@@ -403,12 +418,14 @@ class Backtester:
                 'p_value': float(p_value) if np.isfinite(p_value) else np.nan,
                 'observed_results': observed_results,
                 'sharpes': sharpes.tolist(),
+                'sortinos': sortino_list.tolist(),
             }
 
         return {
             'p_value': np.nan,
             'observed_results': observed_results,
             'sharpes': [],
+            'sortinos': [],
         }
 
     def calculate_performance_metrics(self):

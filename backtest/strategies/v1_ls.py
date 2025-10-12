@@ -17,7 +17,7 @@ from hist_data import HistoricalDataCollector
 
 
 class BTCAltShortStrategy:
-    def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int = 30, current_btc_ratio: float = 0.3, drift_threshold: float = 0.20):
+    def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int = 1, current_btc_ratio: float = 0.1, drift_threshold: float = 0.05):
         """
         Initialize BTC long / Altcoin short strategy.
         
@@ -101,7 +101,7 @@ class BTCAltShortStrategy:
             return 1.0  # Default variance
         
         df = df.set_index('timestamp')
-        hourly = df['close'].resample('1H').last().dropna()
+        hourly = df['close'].resample('1h').last().dropna()
         
         if len(hourly) < 48:
             return 1.0
