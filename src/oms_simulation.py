@@ -249,9 +249,6 @@ class OMSClient:
                     total_value += unrealized
                 # Maintain notional and latest value fields for reporting
                 pos['value'] = abs(quantity) * current_price
-            else:
-                # Spot: full notional value contributes to portfolio value
-                pos['value'] = abs(quantity) * current_price
                 total_value += pos['value']
         return total_value
 

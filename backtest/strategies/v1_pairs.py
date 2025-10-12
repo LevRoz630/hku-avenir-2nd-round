@@ -39,6 +39,10 @@ class PairTradingStrategy:
                 'last_beta': 1.0,
             })
 
+    def _set_oms_and_dm(self, oms_client: OMSClient, data_manager: HistoricalDataCollector) -> None:
+        self.oms_client = oms_client
+        self.data_manager = data_manager
+
     def _get_daily_closes(self, base_symbol: str) -> pd.Series:
         """Return daily close series up to current time using mark OHLCV.
 
@@ -108,14 +112,11 @@ class PairTradingStrategy:
 
 
     def run_strategy(self, oms_client: OMSClient, data_manager: HistoricalDataCollector):
+        self._set_oms_and_dm(oms_client, data_manager)
         
         # Track last entry day per pair to enforce one entry per day
         if not hasattr(self, '_last_entry_day'):
             self._last_entry_day = {id(p): None for p in self.pairs}
-
-        # Only make entry/exit decisions once per day using daily signals
-        self.oms_client = oms_client    
-        self.data_manager = data_manager
 
         all_orders: List[Dict] = []
         for p in self.pairs:

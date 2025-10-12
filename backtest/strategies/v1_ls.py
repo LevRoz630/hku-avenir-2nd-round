@@ -82,7 +82,7 @@ class BTCAltShortStrategy:
         
         # Get price 24 hours ago and current price
         df = df.set_index('timestamp')
-        hourly = df['close'].resample('1H').last().dropna()
+        hourly = df['close'].resample('1h').last().dropna()
         
         if len(hourly) < 24:
             return 0.0
