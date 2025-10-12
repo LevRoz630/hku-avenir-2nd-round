@@ -179,7 +179,7 @@ class HistoricalDataCollector:
 
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = True):
+                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = True, export: bool = False):
         """
         Unified wrapper function to load historical data for a specific time period.
         
@@ -210,7 +210,8 @@ class HistoricalDataCollector:
         load_from_class : bool, optional
             Whether to load data from class stores. Default is False.
             This is used for permutations as we shuffle the data inside of the class and using load_from_cache() leads to same data being used for algo
-        
+        export : bool, optional
+            Whether to export data to Parquet file. Default is False.
         Returns
         -------
         pandas.DataFrame
@@ -293,17 +294,17 @@ class HistoricalDataCollector:
                 )
 
                 if data_type == "mark_ohlcv_futures":
-                    filtered_data = self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date)
+                    filtered_data = self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
                 elif data_type == "index_ohlcv_futures":
-                    filtered_data = self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date)
+                    filtered_data = self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
                 elif data_type == "ohlcv_spot":
-                    filtered_data = self.collect_spot_ohlcv(symbol, timeframe, start_date)
+                    filtered_data = self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
                 elif data_type == "funding_rates":
-                    filtered_data = self.collect_funding_rates(symbol, start_date)
+                    filtered_data = self.collect_funding_rates(symbol, start_date, export=export)
                 elif data_type == "open_interest":
-                    filtered_data = self.collect_open_interest(symbol, timeframe, start_date)
+                    filtered_data = self.collect_open_interest(symbol, timeframe, start_date, export=export)
                 elif data_type == "trades_futures":
-                    filtered_data = self.collect_perpetual_trades(symbol, start_date)
+                    filtered_data = self.collect_perpetual_trades(symbol, start_date, export=export)
                 else:
                     raise ValueError(f"Invalid data type: {data_type}")
         
