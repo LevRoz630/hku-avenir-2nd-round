@@ -12,7 +12,8 @@ Strategy Logic:
 from typing import List, Dict
 import numpy as np
 import pandas as pd
-from oms_simulation import BacktesterOMS
+from oms_simulation import OMSClient
+from hist_data import HistoricalDataCollector
 
 
 class BTCAltShortStrategy:
@@ -26,8 +27,9 @@ class BTCAltShortStrategy:
             lookback_days: Days of history for variance calculation
         """
         self.symbols = symbols
-        self.oms_client = BacktesterOMS(historical_data_dir=historical_data_dir)
-        
+        self.oms_client = None 
+        self.data_manager = None
+
         # Identify BTC and altcoins
         self.btc_symbol = None
         self.altcoin_symbols = []
@@ -187,9 +189,11 @@ class BTCAltShortStrategy:
         
         return drift > drift_threshold
     
-    def run_strategy(self):
+    def run_strategy(self, oms_client: OMSClient, data_manager: HistoricalDataCollector):
         """Execute strategy logic."""
         orders = []
+        self.oms_client = oms_client
+        self.data_manager = data_manager
         now = self.oms_client.current_time
         
         # Check if we should rebalance (once per day)
@@ -198,7 +202,7 @@ class BTCAltShortStrategy:
         should_rebalance_ratio = self._should_rebalance_ratio()
         
         if not (should_rebalance_daily or should_rebalance_ratio):
-            return  # No action needed
+            return []  # No action needed
         
         print(f"\n{'='*60}")
         print(f"REBALANCING at {now}")
@@ -214,7 +218,7 @@ class BTCAltShortStrategy:
             orders.append({'symbol': self.btc_symbol, 'instrument_type': 'future', 'side': 'CLOSE'})
             for alt_sym in self.altcoin_symbols:
                 orders.append({'symbol': alt_sym, 'instrument_type': 'future', 'side': 'CLOSE'})
-            return
+            return orders
         
         print(f"\nAltcoin weights (filtered >10%):")
         for sym, weight in altcoin_weights.items():

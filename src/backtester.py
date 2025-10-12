@@ -7,7 +7,6 @@ import pandas as pd
 from pathlib import Path
 from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
-from position_manager import PositionManager
 import plotly.graph_objects as go
 import json
 
@@ -19,11 +18,11 @@ class Backtester:
 
         Responsibilities:
         - Ensure historical data availability and push into the collector cache
-        - Iterate the clock, ask strategy for orders, run PositionManager filters
+        - Iterate the clock, ask strategy for orders, run Position Manager filters
         - Send sized orders to OMS and track portfolio metrics
 
         Automatically sets up OMSClient and HistoricalDataCollector.
-        Strategy and PositionManager are passed as an argument to run_backtest ()
+        Strategy and Position Manager are passed as an argument to run_backtest (strategy, position_manager)
         """
         self.data_manager = HistoricalDataCollector(historical_data_dir)
         self.oms_client = OMSClient(historical_data_dir=historical_data_dir)
@@ -45,7 +44,7 @@ class Backtester:
         
     def run_backtest(self, 
                         strategy: Any,
-                        position_manager: PositionManager,
+                        position_manager: Any,
                         start_date: datetime = None,
                         end_date: datetime = None,
                         time_step: timedelta = None,
@@ -168,9 +167,8 @@ class Backtester:
 
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
 
-                # Sync the position manager with the oms and data manager so it would have the most up to date information
-                self.position_manager.oms_and_dm(self.oms_client, self.data_manager)
-                filtered_orders = self.position_manager.filter_orders(orders=orders)
+                # we pass the oms and data manager to the position manager so it would have the most up to date information
+                filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
 
                 if filtered_orders is not None:
                     for order in filtered_orders:
@@ -232,7 +230,7 @@ class Backtester:
 
     def run_permutation_backtest(self, 
                                  strategy: Any,
-                                 position_manager: PositionManager,
+                                 position_manager: Any,
                                  start_date: datetime = None,
                                  end_date: datetime = None,
                                  time_step: timedelta = None,

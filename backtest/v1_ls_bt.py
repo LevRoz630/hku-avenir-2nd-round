@@ -12,7 +12,7 @@ import logging
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from position_managers.v1_ls_pm import PositionManager
+from position_managers.v1_ls_pm import V1LSPositionManager
 from backtester import Backtester
 from strategies.v1_ls import BTCAltShortStrategy
 # from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
@@ -32,7 +32,7 @@ def main():
     start_date = datetime.now(timezone.utc) - timedelta(days = 180)
     end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
-    position_manager = PositionManager()
+    position_manager = V1LSPositionManager()
     backtester = Backtester()
     strategy = BTCAltShortStrategy(symbols=symbols, historical_data_dir=str(hist_dir), lookback_days=5)
     results = backtester.run_backtest(
@@ -40,7 +40,7 @@ def main():
         position_manager=position_manager,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(days = 1),
+        time_step=timedelta(hours = 1),
         market_type="futures",
     )
     backtester.print_results(results)
