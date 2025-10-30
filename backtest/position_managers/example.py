@@ -40,7 +40,7 @@ class PositionManager:
             if weighted_open is not None:
                 values = [x.get('value', 0.0) for x in weighted_open]
                 if sum(values) > oms_client.balance['USDT']:
-                    logger.error(f"Insufficient USDT balance. Required: {values}, Available: {oms_client.balance['USDT']}")
+                    logger.error(f"Insufficient USDT balance. Required: {sum(values)}, Available: {oms_client.balance['USDT']}")
                     return close_orders if close_orders else None
                 return close_orders + weighted_open
 

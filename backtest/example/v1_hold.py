@@ -24,8 +24,7 @@ class HoldStrategy:
         # Only buy once at the beginning, then hold
         if not self.has_bought:
             # Allocate all USDT equally to all symbols (assume all are spot or perpetual)
-            usdt = self.oms_client.balance['USDT']
-            if usdt > 0:
+            if self.oms_client.balance['USDT'] > 0:
                 for symbol in self.symbols:
                     # Determine instrument type
                     self.orders.append({

@@ -9,8 +9,147 @@ from hist_data import HistoricalDataCollector
 from format_utils import format_positions_table, format_balances_table
 import plotly.graph_objects as go
 import json
+import copy
+import inspect
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def _run_single_permutation_worker(args):
+    (permutation_idx, data_snapshots, base_symbols, market_type, start_date, end_date,
+     time_step, aligned_start, starting_balance, historical_data_dir,
+     strategy_class, strategy_init_args, position_manager_class, position_manager_init_args) = args
+    
+    try:
+        data_manager = HistoricalDataCollector(historical_data_dir)
+        if market_type == "spot":
+            for sym in base_symbols:
+                if sym in data_snapshots.get('spot', {}):
+                    df = copy.deepcopy(data_snapshots['spot'][sym])
+                    if permutation_idx > 0:
+                        df = df.sample(frac=1, random_state=permutation_idx).reset_index(drop=True)
+                        df["timestamp"] = data_snapshots['spot'][sym]["timestamp"]
+                    data_manager.spot_ohlcv_data[sym] = df
+        elif market_type == "futures":
+            for sym in base_symbols:
+                if sym in data_snapshots.get('index_future', {}):
+                    df = copy.deepcopy(data_snapshots['index_future'][sym])
+                    if permutation_idx > 0:
+                        df = df.sample(frac=1, random_state=permutation_idx).reset_index(drop=True)
+                        df["timestamp"] = data_snapshots['index_future'][sym]["timestamp"]
+                    data_manager.perpetual_index_ohlcv_data[sym] = df
+                if sym in data_snapshots.get('mark_future', {}):
+                    df = copy.deepcopy(data_snapshots['mark_future'][sym])
+                    if permutation_idx > 0:
+                        df = df.sample(frac=1, random_state=permutation_idx + 1337).reset_index(drop=True)
+                        df["timestamp"] = data_snapshots['mark_future'][sym]["timestamp"]
+                    data_manager.perpetual_mark_ohlcv_data[sym] = df
+        oms_client = OMSClient(historical_data_dir=historical_data_dir)
+        oms_client.positions = {}
+        oms_client.trade_history = []
+        oms_client.balance = {"USDT": starting_balance}
+        oms_client.set_current_time(aligned_start)
+        oms_client.set_data_manager(data_manager)
+        
+        strategy = strategy_class(**strategy_init_args)
+        strategy.start_time = aligned_start
+        strategy.end_time = end_date
+        
+        position_manager = position_manager_class(**position_manager_init_args)
+        
+        portfolio_values = []
+        iteration = 0
+        
+        while oms_client.current_time <= end_date:
+            try:
+                total_value = oms_client.update_portfolio_value()
+                portfolio_values.append(total_value)
+                
+                orders = strategy.run_strategy(oms_client=oms_client, data_manager=data_manager)
+                filtered = position_manager.filter_orders(orders=orders, oms_client=oms_client, data_manager=data_manager)
+                
+                if filtered is not None:
+                    for order in filtered:
+                        try:
+                            oms_client.set_target_position(
+                                order['symbol'], 
+                                order['instrument_type'], 
+                                order.get('value', 0.0), 
+                                order['side']
+                            )
+                        except Exception as e:
+                            logger.error(f"Error setting target position: {e}")
+                            continue
+                
+                oms_client.set_current_time(oms_client.current_time + time_step)
+                iteration += 1
+                
+            except Exception as e:
+                logger.error(f"Error in backtest iteration {iteration}: {e}")
+                oms_client.set_current_time(oms_client.current_time + time_step)
+                continue
+        returns = []
+        for i in range(1, len(portfolio_values)):
+            prev = portfolio_values[i-1]
+            curr = portfolio_values[i]
+            if prev > 0:
+                returns.append((curr - prev) / prev)
+        
+        result = {
+            'permutation_idx': permutation_idx,
+            'returns': np.array(returns, dtype=float)
+        }
+        if permutation_idx == 0:
+            drawdowns = []
+            max_drawdown = 0
+            peak = portfolio_values[0] if portfolio_values else 0
+            for value in portfolio_values:
+                if value > peak:
+                    peak = value
+                drawdown = (peak - value) / peak if peak > 0 else 0
+                drawdowns.append(drawdown)
+                if drawdown > max_drawdown:
+                    max_drawdown = drawdown
+            
+            sharpe_ratio = 0
+            sortino_ratio = 0
+            if returns:
+                mean_return = np.mean(returns)
+                std_return = np.std(returns)
+                if std_return > 0:
+                    sharpe_ratio = mean_return / std_return
+                downside_returns = [r for r in returns if r < 0]
+                if downside_returns:
+                    downside_std = np.std(downside_returns)
+                    if downside_std > 0:
+                        sortino_ratio = mean_return / downside_std
+            
+            result['observed_results'] = {
+                'total_return': (portfolio_values[-1] / portfolio_values[0] - 1) if portfolio_values and portfolio_values[0] > 0 else 0,
+                'returns': list(returns),
+                'drawdowns': drawdowns,
+                'max_drawdown': max_drawdown,
+                'sharpe_ratio': sharpe_ratio,
+                'sortino_ratio': sortino_ratio,
+                'trade_history': [dict(t) for t in oms_client.trade_history],
+                'final_balance': dict(oms_client.balance),
+                'final_positions': oms_client.get_position()
+            }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in permutation {permutation_idx}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'permutation_idx': permutation_idx,
+            'returns': np.array([], dtype=float),
+            'error': str(e)
+        }
+
 
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
@@ -236,13 +375,11 @@ class Backtester:
                                  end_date: datetime = None,
                                  time_step: timedelta = None,
                                  market_type: str = None,
-                                 permutations: int = 100):
-        """
-        Shuffle price history multiple times and re-run the strategy to form a null
-        distribution for performance statistics. Index 0 is the observed (unshuffled) run.
-        """
+                                 permutations: int = 100,
+                                 max_workers: int = None):
+        if max_workers is None:
+            max_workers = max(1, os.cpu_count() - 1 if os.cpu_count() else 1)
 
-        # Ensure historical data exists for requested symbols; download if missing
         data_path = Path(self.historical_data_dir)
         symbols = strategy.symbols
         base_symbols = [s.replace('-PERP', '') for s in symbols]
@@ -252,138 +389,111 @@ class Backtester:
         desired_timeframe = self._time_step_to_timeframe(time_step)
 
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
-
-        # Initial data load
         for sym in base_symbols:
             if market_type == "spot":
                 self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
             elif market_type == "futures":
                 self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
                 self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
-        # Snapshot starting balance to reset between permutations
-        starting_balance = float(self.oms_client.balance.get('USDT', 10000.0))
-        self.permutation_returns = []
+        starting_balance = float(self.oms_client.balance['USDT'])
 
-        # Snapshot original dataframes to ensure i=0 uses exact originals and each
-        # permutation shuffles independently from the same baseline
-        orig_spot = {}
-        orig_index_future = {}
-        orig_mark_future = {}
+        data_snapshots = {
+            'spot': {},
+            'index_future': {},
+            'mark_future': {}
+        }
 
         for sym in base_symbols:
             if market_type == "spot":
-                orig_spot[sym] = self.data_manager.spot_ohlcv_data.get(sym)
+                df = self.data_manager.spot_ohlcv_data.get(sym)
+                if df is not None:
+                    data_snapshots['spot'][sym] = df.copy()
             elif market_type == "futures":
-                orig_index_future[sym] = self.data_manager.perpetual_index_ohlcv_data.get(sym)
-                orig_mark_future[sym] = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
+                df_idx = self.data_manager.perpetual_index_ohlcv_data.get(sym)
+                if df_idx is not None:
+                    data_snapshots['index_future'][sym] = df_idx.copy()
+                df_mark = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
+                if df_mark is not None:
+                    data_snapshots['mark_future'][sym] = df_mark.copy()
             else:
                 raise ValueError(f"Invalid market type: {market_type}")
 
-
-        observed_results: Dict[str, Any] = None
-
-        for i in range(permutations + 1):
-            logger.info(f"permutation {i} of {permutations}")
-
-            if i > 0:
-                for sym in base_symbols:
-                    # reshuffle again and then restore the timestamp to only change the targets
-                    if market_type == "spot" and sym in orig_spot:
-                        self.data_manager.spot_ohlcv_data[sym] = orig_spot[sym].sample(frac=1, random_state=i).reset_index(drop=True)
-                        self.data_manager.spot_ohlcv_data[sym]["timestamp"] = orig_spot[sym]["timestamp"]
-                    elif market_type == "futures":
-                        if sym in orig_index_future:
-                            self.data_manager.perpetual_index_ohlcv_data[sym] = orig_index_future[sym].sample(frac=1, random_state=i).reset_index(drop=True)
-                            self.data_manager.perpetual_index_ohlcv_data[sym]["timestamp"] = orig_index_future[sym]["timestamp"]
-                        if sym in orig_mark_future:
-                            self.data_manager.perpetual_mark_ohlcv_data[sym] = orig_mark_future[sym].sample(frac=1, random_state=i + 1337).reset_index(drop=True)
-                            self.data_manager.perpetual_mark_ohlcv_data[sym]["timestamp"] = orig_mark_future[sym]["timestamp"]
+        earliest_ts = None
+        for sym in base_symbols:
+            for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
+                df = store.get(sym)
+                if df is not None and not df.empty:
+                    first = df['timestamp'].min()
+                    if first.tz is None:
+                        first = first.tz_localize('UTC')
                     else:
-                        raise ValueError(f"Invalid market type: {market_type}")
+                        first = first.tz_convert('UTC')
+                    earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
+        aligned_start = start_date
+        if earliest_ts is not None and start_date < earliest_ts:
+            aligned_start = earliest_ts
 
-            # Align start time to earliest available data
-            earliest_ts = None
-            for sym in base_symbols:
-                for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
-                    df = store.get(sym)
-                    if df is not None and not df.empty:
-                        first = df['timestamp'].min()
-                        if first.tz is None:
-                            first = first.tz_localize('UTC')
-                        else:
-                            first = first.tz_convert('UTC')
-                        earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
-            aligned_start = start_date
-            if earliest_ts is not None and start_date < earliest_ts:
-                aligned_start = earliest_ts
+        strategy_class = strategy.__class__
+        strategy_init_args = self._extract_init_args(strategy)
+        position_manager_class = position_manager.__class__
+        position_manager_init_args = self._extract_init_args(position_manager)
 
-            # Reset OMS and strategy state
-            self.oms_client.positions = {}
-            self.oms_client.trade_history = []
-            self.oms_client.balance = {"USDT": starting_balance}
-            self.portfolio_values = []
-            self.returns = []
-            strategy.start_time = aligned_start
-            strategy.end_time = end_date
-            self.position_manager = position_manager
+        worker_args_list = []
+        for i in range(permutations + 1):
+            args = (
+                i,  # permutation_idx
+                data_snapshots,
+                base_symbols,
+                market_type,
+                start_date,
+                end_date,
+                time_step,
+                aligned_start,
+                starting_balance,
+                self.historical_data_dir,
+                strategy_class,
+                strategy_init_args,
+                position_manager_class,
+                position_manager_init_args
+            )
+            worker_args_list.append(args)
 
-            # Set time and data context
-            self.oms_client.set_current_time(strategy.start_time)
-            self.oms_client.set_data_manager(self.data_manager)
+        logger.info(f"Running {permutations + 1} permutations ({permutations} shuffled + 1 observed) with {max_workers} workers")
+        permutation_results = {}
+        observed_results = None
 
-            # Run loop
-            iteration = 0
-
-            while self.oms_client.current_time <= end_date:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {executor.submit(_run_single_permutation_worker, args): args[0] for args in worker_args_list}
+            
+            completed = 0
+            for future in as_completed(future_to_idx):
+                completed += 1
                 try:
-                    total_value = self.oms_client.update_portfolio_value()
-                    self.portfolio_values.append(total_value)
-                    try:
-                        positions_tbl = format_positions_table(self.oms_client.get_position())
-                        logger.info("\nPositions:\n" + positions_tbl)
-                    except Exception as _e:
-                        summary = self.oms_client.get_position_summary()
-                        logger.info(f"Position Summary: {summary}")
-
-                    orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
-                    filtered = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
-                    if filtered is not None:
-                        for order in filtered:
-                            try:
-                                self.oms_client.set_target_position(order['symbol'], order['instrument_type'], order.get('value', 0.0), order['side'])
-                            except Exception as e:
-                                logger.error(f"Error setting target position: {e}")
-                                continue
-
-                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
-                    iteration += 1
+                    result = future.result()
+                    idx = result['permutation_idx']
+                    permutation_results[idx] = result
                     
+                    if idx == 0:
+                        observed_results = result.get('observed_results')
+                    
+                    logger.info(f"Completed permutation {idx} ({completed}/{permutations + 1})")
                 except Exception as e:
-                    logger.error(f"Error in backtest iteration {iteration}: {e}")
-                    self.oms_client.set_current_time(self.oms_client.current_time + time_step)
-                    continue
+                    idx = future_to_idx[future]
+                    logger.error(f"Permutation {idx} failed: {e}")
+                    permutation_results[idx] = {
+                        'permutation_idx': idx,
+                        'returns': np.array([], dtype=float)
+                    }
 
-            # Finish and record metrics for this permutation
-            logger.info(f"permutation {i} of {permutations} complete")
-            self.calculate_performance_metrics()
-            self.permutation_returns.append(np.array(self.returns, dtype=float))
+        # Aggregate results in order
+        permutation_returns = []
+        for i in range(permutations + 1):
+            if i in permutation_results:
+                permutation_returns.append(permutation_results[i]['returns'])
+            else:
+                permutation_returns.append(np.array([], dtype=float))
 
-            # Capture observed run's result payload for caller
-            if i == 0:
-                observed_results = {
-                    'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
-                    'returns': list(self.returns),
-                    'drawdowns': self.drawdowns,
-                    'max_drawdown': self.max_drawdown,
-                    'sharpe_ratio': self.sharpe_ratio,
-                    'sortino_ratio': self.sortino_ratio,
-                    'trade_history': list(self.oms_client.trade_history),
-                    'final_balance': dict(self.oms_client.balance),
-                    'final_positions': self.oms_client.get_position()
-                }
-
-        # Compute permutation p-value on Sharpe ratios
-        if len(self.permutation_returns) > 0:
+        if len(permutation_returns) > 0 and len(permutation_returns[0]) > 0:
             def _sharpe(arr: np.ndarray) -> float:
                 arr = np.asarray(arr, dtype=float)
                 if arr.size == 0:
@@ -397,14 +507,16 @@ class Backtester:
                 if arr.size == 0:
                     return np.nan
                 mu = np.nanmean(arr)
-                sigma = np.nanstd(arr, ddof=1)
-                downside_risk = np.nanmean(np.where(arr < 0, arr, 0))
-                return mu / downside_risk if downside_risk > 0 and np.isfinite(mu) else np.nan
+                downside_returns = arr[arr < 0]
+                if len(downside_returns) == 0:
+                    return np.nan
+                downside_std = np.nanstd(downside_returns, ddof=1)
+                return mu / downside_std if downside_std > 0 and np.isfinite(mu) else np.nan
 
-            T_obs = _sharpe(self.permutation_returns[0])
+            T_obs = _sharpe(permutation_returns[0])
             sharpe_list = []
             sortino_list = []
-            for r in self.permutation_returns:
+            for r in permutation_returns:
                 s = _sharpe(r)
                 if np.isfinite(s):
                     sharpe_list.append(s)
@@ -418,7 +530,7 @@ class Backtester:
                 'p_value': float(p_value) if np.isfinite(p_value) else np.nan,
                 'observed_results': observed_results,
                 'sharpes': sharpes.tolist(),
-                'sortinos': sortino_list.tolist(),
+                'sortinos': sortino_list,
             }
 
         return {
@@ -427,6 +539,29 @@ class Backtester:
             'sharpes': [],
             'sortinos': [],
         }
+
+    def _extract_init_args(self, instance: Any) -> Dict[str, Any]:
+        init_signature = inspect.signature(instance.__class__.__init__)
+        args_dict = {}
+        
+        for param_name, param in init_signature.parameters.items():
+            if param_name == 'self':
+                continue
+            
+            if param.default == inspect.Parameter.empty and not hasattr(instance, param_name):
+                continue
+            
+            if hasattr(instance, param_name):
+                try:
+                    value = getattr(instance, param_name)
+                    if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                        args_dict[param_name] = value
+                    elif isinstance(value, Path):
+                        args_dict[param_name] = str(value)
+                except Exception:
+                    continue
+        
+        return args_dict
 
     def calculate_performance_metrics(self):
         """Calculate performance metrics"""
