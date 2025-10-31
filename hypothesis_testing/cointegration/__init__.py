@@ -9,6 +9,7 @@ from .persistence import test_persistence_rolling
 from .spread_validator import compute_max_zscore, validate_spread_constraints
 from .optimizer import optimize_lookback_window, score_basket, optimize_basket_size
 from .visualization import plot_spread_analysis, plot_lookback_optimization, print_summary_statistics
+from .utils_parallel import test_baskets_parallel
 
 __all__ = [
     'load_price_data',
@@ -25,5 +26,6 @@ __all__ = [
     'plot_spread_analysis',
     'plot_lookback_optimization',
     'print_summary_statistics',
+    'test_baskets_parallel',
 ]
 

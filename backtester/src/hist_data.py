@@ -285,6 +285,8 @@ class HistoricalDataCollector:
                 )
                 if filtered_data is None or filtered_data.empty:
                     return None
+                # Ensure we have a copy to avoid SettingWithCopyWarning
+                filtered_data = filtered_data.copy()
             else:
                 filtered_data = self.load_cached_window(
                 kind_map[data_type], symbol, start_date, end_date,
@@ -318,13 +320,13 @@ class HistoricalDataCollector:
             return None
         # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
         if not pd.api.types.is_datetime64_any_dtype(filtered_data["timestamp"]):
-            filtered_data["timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
+            filtered_data.loc[:, "timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
         else:
             ts = filtered_data["timestamp"]
             if ts.dt.tz is None:
-                filtered_data["timestamp"] = ts.dt.tz_localize('UTC')
+                filtered_data.loc[:, "timestamp"] = ts.dt.tz_localize('UTC')
             else:
-                filtered_data["timestamp"] = ts.dt.tz_convert('UTC')
+                filtered_data.loc[:, "timestamp"] = ts.dt.tz_convert('UTC')
         
         # Filter data to the requested time period (start_date/end_date already UTC)
         filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
@@ -357,12 +359,14 @@ class HistoricalDataCollector:
         try:
             s = pd.Timestamp(start_date).tz_convert('UTC') if pd.Timestamp(start_date).tzinfo is not None else pd.Timestamp(start_date, tz='UTC')
             e = pd.Timestamp(end_date).tz_convert('UTC') if pd.Timestamp(end_date).tzinfo is not None else pd.Timestamp(end_date, tz='UTC')
+            # Work with a copy to avoid modifying the original DataFrame
+            df = df.copy()
             ts = df['timestamp']
 
             if df['timestamp'].dt.tz is None:
-                df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+                df.loc[:, 'timestamp'] = df['timestamp'].dt.tz_localize('UTC')
             else:
-                df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
+                df.loc[:, 'timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             filtered = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
             return filtered if not filtered.empty else None
         except Exception as e:

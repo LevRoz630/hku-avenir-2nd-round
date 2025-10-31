@@ -51,12 +51,12 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days = 50)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 10)
     end_date = datetime.now(timezone.utc) - timedelta(days = 4)
 
     position_manager = PositionManager()
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=50)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=10)
     
     results = backtester.run_backtest(
         strategy=strategy,
@@ -73,17 +73,17 @@ def main():
     backtester.plot_returns()
     backtester.plot_positions()
 
-    # results = backtester.run_permutation_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    #     permutations=100,
-    # )
-    # print("p_value:", results.get("p_value"))
-    # print("sharpes:", results.get("sharpes"))
+    results = backtester.run_permutation_backtest(
+        strategy=strategy,
+        position_manager=position_manager,
+        start_date=start_date,
+        end_date=end_date,
+        time_step=timedelta(days = 1),
+        market_type="futures",
+        permutations=100,
+    )
+    print("p_value:", results.get("p_value"))
+    print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

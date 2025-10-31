@@ -16,6 +16,7 @@ def set_pairs_config(pairs_config: List[Dict]):
 class PairTradingStrategy:
     def __init__(self, symbols: List[str], historical_data_dir: str, lookback_days: int):
         self.symbols = symbols
+        self.historical_data_dir = historical_data_dir
         self.oms_client = None
         self.data_manager = None
         self.lookback_days = lookback_days 

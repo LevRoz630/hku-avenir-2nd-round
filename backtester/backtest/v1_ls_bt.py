@@ -29,12 +29,12 @@ def main():
 
     # Historical data directory
     hist_dir = Path(__file__).parents[2] / "hku-data" / "test_data"
-    start_date = datetime.now(timezone.utc) - timedelta(days = 365)
+    start_date = datetime.now(timezone.utc) - timedelta(days = 100)
     end_date = datetime.now(timezone.utc) - timedelta(days = 1)
 
     position_manager = V1LSPositionManager()
     backtester = Backtester()
-    strategy = BTCAltShortStrategy(symbols=symbols, historical_data_dir=str(hist_dir), lookback_days=1)
+    strategy = BTCAltShortStrategy(symbols=symbols, historical_data_dir=str(hist_dir), lookback_days=5)
     print("Running single backtest first...")
     results = backtester.run_backtest(
         strategy=strategy,

@@ -332,8 +332,10 @@ class Backtester:
                         if not current_price:
                             continue
                         qty = float(pos.get('quantity', 0.0))
-                        # signed notional: qty * price (SHORTs will have negative qty)
-                        exposures[symbol] = qty * current_price
+                        side = pos.get('side', 'LONG')
+                        # signed notional: positive for LONG, negative for SHORT
+                        signed_notional = qty * current_price if side == 'LONG' else -qty * current_price
+                        exposures[symbol] = signed_notional
                     self.position_exposures_history.append({
                         'timestamp': pd.Timestamp(self.oms_client.current_time),
                         'exposures': exposures

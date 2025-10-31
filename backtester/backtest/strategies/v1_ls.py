@@ -27,6 +27,7 @@ class BTCAltShortStrategy:
             lookback_days: Days of history for variance calculation
         """
         self.symbols = symbols
+        self.historical_data_dir = historical_data_dir
         self.oms_client = None 
         self.data_manager = None
 
