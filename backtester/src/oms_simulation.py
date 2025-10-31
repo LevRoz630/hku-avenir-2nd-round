@@ -31,7 +31,7 @@ class OMSClient:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
-        self.balance = 10000.0  # Balance for trading
+        self.balance = {"USDT": 10000.0}  # Balance for trading (always dict format)
         self.trade_history = []  # All trades executed
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
@@ -52,10 +52,9 @@ class OMSClient:
         return symbol
     
     def get_position(self) -> List[Dict[str, Any]]:
-        """Return current non-zero positions with live valuation and PnL."""
         positions = []
         for symbol, pos in self.positions.items():
-            instrument_type = 'future' if symbol.endswith('-PERP') else 'spot'
+            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
 
             if abs(pos['quantity']) > 0:
                 # Calculate current value and PnL
@@ -104,8 +103,8 @@ class OMSClient:
 
         # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
-        if trade_value > self.balance:
-            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance}")
+        if trade_value > self.balance['USDT']:
+            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
 
         # Convert USDT → base-asset quantity at current mark/index price
         trade_qty = trade_value / current_price
@@ -128,7 +127,7 @@ class OMSClient:
         if position_side == 'CLOSE':
             # Explicit close: realize PnL and zero out the position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance += (pnl or 0.0) + (principal or 0.0)
+            self.balance['USDT'] += (pnl or 0.0) + (principal or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
                 'quantity': 0.0,
@@ -141,7 +140,7 @@ class OMSClient:
 
         elif position_side == current_side:
             # Add to an existing position on the same side, update VWAP entry_price
-            self.balance -= trade_value
+            self.balance['USDT'] -= trade_value
             new_qty = current_quantity + trade_qty
             self.positions[symbol] = {
                 'quantity': new_qty,
@@ -157,8 +156,8 @@ class OMSClient:
         elif position_side != current_side:
             # Flip side: realize PnL on the old side, then open a fresh position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance += (pnl or 0.0) + (principal or 0.0)
-            self.balance -= trade_value
+            self.balance['USDT'] += (pnl or 0.0) + (principal or 0.0)
+            self.balance['USDT'] -= trade_value
             self.positions[symbol] = {
                 'quantity': trade_qty,
                 'value': abs(trade_qty) * current_price,
@@ -185,20 +184,19 @@ class OMSClient:
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
     def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
-        """Get current price for a symbol 
-        Will use cache if availble to source the price that is a bit ahead of the current price.
-        This is done for the sake of order being executed after and not before the decision.
-        Was tested on hourly data, not 15 minutes or less so behaviour there is less known and might lead to underestimation of the pnl
-        """
         if not self.data_manager or not self.current_time:
             return None
 
         try:
+            if instrument_type is None:
+                instrument_type = 'future' if symbol.endswith('-PERP') else 'spot'
+            
             base_symbol = self._normalize_symbol(symbol, instrument_type)
-
-            df = self.data_manager.load_data_period(base_symbol, "15m", "ohlcv_spot" if instrument_type == 'spot' else "mark_ohlcv_futures", self.current_time, self.current_time + timedelta(minutes=15), load_from_class=False)
-            if df.empty:
-                raise Exception(f"No data for {symbol} {instrument_type} between {self.current_time} and {self.current_time + timedelta(minutes=15)} in cache")
+            data_type = "ohlcv_spot" if instrument_type == 'spot' else "mark_ohlcv_futures"
+            
+            df = self.data_manager.load_data_period(base_symbol, "15m", data_type, self.current_time, self.current_time + timedelta(minutes=15), load_from_class=True)
+            if df is None or df.empty:
+                return None
             price = float(df['close'].iloc[-1])
             return price
         except Exception as e:
@@ -226,7 +224,7 @@ class OMSClient:
         Update and return total portfolio value including balances and appropriate position valuation.
         
         """
-        total_value = self.balance
+        total_value = self.balance['USDT']
 
         for symbol, pos in self.positions.items():
             instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')

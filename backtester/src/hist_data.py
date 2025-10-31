@@ -283,6 +283,8 @@ class HistoricalDataCollector:
                 filtered_data = self.load_from_class(
                     kind_map[data_type], symbol, start_date, end_date
                 )
+                if filtered_data is None or filtered_data.empty:
+                    return None
             else:
                 filtered_data = self.load_cached_window(
                 kind_map[data_type], symbol, start_date, end_date,
@@ -361,7 +363,8 @@ class HistoricalDataCollector:
                 df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
             else:
                 df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
-            return df
+            filtered = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
+            return filtered if not filtered.empty else None
         except Exception as e:
             logger.warning(f"Error loading data from class: {e}")
             return None
