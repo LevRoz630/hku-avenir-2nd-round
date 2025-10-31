@@ -2,22 +2,41 @@
 Basket generation and initial cointegration screening.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Optional
 import pandas as pd
 import numpy as np
 from itertools import combinations
 from sklearn.cluster import AgglomerativeClustering
 import logging
-
-from .johansen_test import johansen_test
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
 
+def _generate_combinations_from_cluster(args):
+    """
+    Worker function to generate combinations from a single cluster.
+    Designed to be picklable for multiprocessing.
+    """
+    cluster_symbols, min_basket_size, max_basket_size = args
+    
+    if len(cluster_symbols) < min_basket_size:
+        return []
+    
+    baskets = []
+    for r in range(min_basket_size, min(len(cluster_symbols) + 1, max_basket_size + 1)):
+        baskets.extend([list(combo) for combo in combinations(cluster_symbols, r)])
+    
+    return baskets
+
+
 def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5, 
-                                min_basket_size: int = 2, max_basket_size: int = 6) -> List[List[str]]:
+                                min_basket_size: int = 2, max_basket_size: int = 6,
+                                parallel: bool = True, max_workers: Optional[int] = None,
+                                max_combinations_per_cluster: Optional[int] = 10000) -> List[List[str]]:
     """
     Generate candidate baskets using hierarchical clustering on correlation matrix.
+    Optionally parallelizes combination generation across clusters.
     
     Parameters:
     -----------
@@ -29,6 +48,13 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
         Minimum number of assets in a basket
     max_basket_size : int
         Maximum number of assets in a basket
+    parallel : bool
+        Whether to use parallel processing for combination generation
+    max_workers : Optional[int]
+        Maximum number of worker processes. If None, uses CPU count.
+    max_combinations_per_cluster : Optional[int]
+        Maximum combinations to generate per cluster. If None, no limit.
+        Helps prevent combinatorial explosion with large clusters.
         
     Returns:
     --------
@@ -51,17 +77,102 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
             clusters[cluster_id] = []
         clusters[cluster_id].append(symbol.replace('_close', ''))
     
-    # Generate baskets from clusters
-    baskets = []
-    for cluster_symbols in clusters.values():
+    cluster_list = list(clusters.values())
+    
+    # Filter clusters: if a cluster would generate too many combinations, limit its size
+    filtered_clusters = []
+    for cluster_symbols in cluster_list:
         if len(cluster_symbols) < min_basket_size:
             continue
-        # Generate all combinations within cluster
-        for r in range(min_basket_size, min(len(cluster_symbols) + 1, max_basket_size + 1)):
-            baskets.extend([list(combo) for combo in combinations(cluster_symbols, r)])
+        
+        # Estimate total combinations (avoid computing all combinations)
+        # Formula: C(n,2) + C(n,3) + ... + C(n,max) for n symbols
+        # C(n,r) = n! / (r! * (n-r)!)
+        n = len(cluster_symbols)
+        total_combos = 0
+        for r in range(min_basket_size, min(n + 1, max_basket_size + 1)):
+            # Calculate C(n,r) efficiently
+            if n > 50:  # Use approximation for very large n
+                import math
+                # Stirling approximation or simple upper bound
+                # Upper bound: C(n,r) <= n^r / r!
+                total_combos += int(n ** r / math.factorial(r))
+            else:
+                # Exact calculation for smaller n
+                import math
+                if r <= n:
+                    total_combos += math.comb(n, r) if hasattr(math, 'comb') else int(
+                        math.factorial(n) / (math.factorial(r) * math.factorial(n - r))
+                    )
+        
+        # If too many combinations, limit cluster size intelligently
+        if max_combinations_per_cluster and total_combos > max_combinations_per_cluster:
+            # Use top N most correlated symbols within cluster
+            cluster_cols = [col for col in price_data.columns 
+                           if col.replace('_close', '') in cluster_symbols]
+            if len(cluster_cols) > 0:
+                cluster_returns = returns[cluster_cols]
+                cluster_corr = cluster_returns.corr()
+                # Get average correlation for each symbol
+                avg_corr = cluster_corr.mean().sort_values(ascending=False)
+                # Find max symbols that keep us under limit
+                max_symbols = min_basket_size
+                import math
+                for n_test in range(min_basket_size, len(cluster_symbols) + 1):
+                    test_total = 0
+                    for r in range(min_basket_size, min(n_test + 1, max_basket_size + 1)):
+                        if n_test > 50:
+                            # Approximation
+                            test_total += int(n_test ** r / math.factorial(r))
+                        else:
+                            # Exact
+                            if hasattr(math, 'comb'):
+                                test_total += math.comb(n_test, r)
+                            else:
+                                test_total += int(math.factorial(n_test) / 
+                                                (math.factorial(r) * math.factorial(n_test - r)))
+                    
+                    if test_total <= max_combinations_per_cluster:
+                        max_symbols = n_test
+                    else:
+                        break
+                
+                top_symbols = avg_corr.head(max_symbols).index.tolist()
+                top_symbols = [s.replace('_close', '') for s in top_symbols]
+                filtered_clusters.append(top_symbols)
+                logger.info(f"Limited cluster size from {len(cluster_symbols)} to {len(top_symbols)} "
+                           f"symbols (estimated {total_combos} -> ~{test_total} combinations)")
+            else:
+                # Fallback: just take first N symbols
+                filtered_clusters.append(cluster_symbols[:min(20, len(cluster_symbols))])
+        else:
+            filtered_clusters.append(cluster_symbols)
     
-    return baskets
+    # Generate baskets from clusters (parallelized)
+    if parallel and len(filtered_clusters) > 1:
 
+        # Prepare arguments
+        args_list = [(cluster_symbols, min_basket_size, max_basket_size) 
+                     for cluster_symbols in filtered_clusters]
+        
+        baskets = []
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_cluster = {
+                executor.submit(_generate_combinations_from_cluster, args): i
+                for i, args in enumerate(args_list)
+            }
+            
+            for future in as_completed(future_to_cluster):
+                try:
+                    cluster_baskets = future.result()
+                    baskets.extend(cluster_baskets)
+                except Exception as e:
+                    cluster_idx = future_to_cluster[future]
+                    logger.warning(f"Failed to generate baskets from cluster {cluster_idx}: {e}")
+        
+        return baskets
+   
+        
 
 def compute_spread(log_prices: np.ndarray, eigenvector: np.ndarray) -> np.ndarray:
     """
@@ -82,52 +193,4 @@ def compute_spread(log_prices: np.ndarray, eigenvector: np.ndarray) -> np.ndarra
     """
     return log_prices @ eigenvector
 
-
-def test_basket_cointegration(price_data: pd.DataFrame, basket: List[str]) -> Optional[Dict]:
-    """
-    Test a single basket for cointegration and compute spread.
-    
-    Parameters:
-    -----------
-    price_data : pd.DataFrame
-        Price data with columns {symbol}_close
-    basket : List[str]
-        List of symbol names in the basket
-        
-    Returns:
-    --------
-    Optional[Dict]
-        Dictionary with basket info, johansen results, eigenvector, spread, and log_prices
-        Returns None if not cointegrated
-    """
-    # Extract basket prices
-    basket_cols = [f'{sym}_close' for sym in basket]
-    basket_prices = price_data[basket_cols].values
-    
-    # Convert to log prices
-    log_prices = np.log(basket_prices)
-    
-    # Run Johansen test
-    try:
-        result = johansen_test(log_prices)
-    except Exception as e:
-        return None
-    
-    if not result['is_cointegrated']:
-        return None
-    
-    # Compute spread using first eigenvector (normalized)
-    eigenvector = result['eigenvectors'][:, 0]
-    # Normalize so first element is 1 (standard normalization)
-    eigenvector = eigenvector / eigenvector[0]
-    
-    spread = compute_spread(log_prices, eigenvector)
-    
-    return {
-        'basket': basket,
-        'johansen_result': result,
-        'eigenvector': eigenvector,
-        'spread': spread,
-        'log_prices': log_prices
-    }
 
