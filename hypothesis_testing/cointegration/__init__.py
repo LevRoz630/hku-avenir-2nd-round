@@ -8,6 +8,8 @@ from .basket_generator import generate_baskets_clustering, compute_spread
 from .optimizer import optimize_lookback_window, score_basket, optimize_basket_size
 from .visualization import plot_spread_analysis, plot_lookback_optimization, print_summary_statistics
 from .utils_parallel import test_baskets_parallel, test_baskets_cointegration_parallel
+from .filter_sustainability import filter_baskets_sustainability
+from .filter_mean_reversion import filter_baskets_mean_reversion
 
 __all__ = [
     'load_price_data',
@@ -22,5 +24,7 @@ __all__ = [
     'print_summary_statistics',
     'test_baskets_parallel',
     'test_baskets_cointegration_parallel',
+    'filter_baskets_sustainability',
+    'filter_baskets_mean_reversion',
 ]
 
