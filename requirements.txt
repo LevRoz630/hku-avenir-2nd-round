@@ -1,6 +1,6 @@
 requests
 ccxt
-asyncio                        # 异步编程支持（Python内置）
+asyncio                       
 python-dotenv
 pandas
 numpy
@@ -10,3 +10,4 @@ plotly
 xgboost
 scikit-learn
 torch
+PyPortfolioOpt

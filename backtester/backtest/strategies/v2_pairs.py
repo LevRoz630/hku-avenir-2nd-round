@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta, timezone
-from hist_data import HistoricalDataCollector
-from oms_simulation import OMSClient
+from src.hist_data import HistoricalDataCollector
+from src.oms_simulation import OMSClient
 # Module-level config setter to pass parameters from the runner script
 _PAIRS_CONFIG: List[Dict] = []
 
@@ -29,6 +29,7 @@ class PairTradingStrategy:
             base_a, base_b = cfg['legs']
             # Legs include -USDT already; append -PERP only for futures
             self.pairs.append({
+                'pair_id': f"{base_a}_{base_b}",  
                 'a_symbol': f"{base_a}-PERP",
                 'b_symbol': f"{base_b}-PERP",
                 'lookback_days': cfg.get('lookback_days', 7),
@@ -150,23 +151,23 @@ class PairTradingStrategy:
                   
                     if z > 0:
                         if p['current_side'] == 'long_spread':
-                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
+                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
 
                         # Short A, Long B * beta
-                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
-                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
+                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'SHORT', 'pair_id': p['pair_id'], 'ratio': 1})
+                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'LONG', 'pair_id': p['pair_id'], 'ratio': beta})
                         p['current_side'] = 'short_spread'
                         p['is_open'] = True
                         self._last_entry_day[id(p)] = day_key
                     else:
                         if p['current_side'] == 'short_spread':
-                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                            orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
+                            orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
                         
                         # Long A, Short B * beta
-                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'LONG'})
-                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'SHORT'})
+                        orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'LONG', 'pair_id': p['pair_id'], 'ratio': beta})
+                        orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'SHORT', 'pair_id': p['pair_id'], 'ratio': 1})
                         p['current_side'] = 'long_spread'
 
                         p['is_open'] = True
@@ -176,8 +177,8 @@ class PairTradingStrategy:
             elif exit_ or stop:
                 orders = []
                 # Close both legs
-                orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
-                orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE'})
+                orders.append({'symbol': a_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
+                orders.append({'symbol': b_sym, 'instrument_type': instrument_type, 'side': 'CLOSE', 'pair_id': p['pair_id'], 'ratio': None})
                 p['is_open'] = False
                 p['current_side'] = None
                 all_orders.extend(orders)
@@ -192,18 +193,18 @@ class PairTradingStrategy:
 
 
 
-        for idx, cfg in enumerate(_PAIRS_CONFIG):
-            base_a, base_b = cfg['legs']
-            # Legs include -USDT already; append -PERP only for futures
-            self.pairs.append({
-                'pair_id': f"{base_a}_{base_b}",  # Unique identifier for the pair
-                'a_symbol': f"{base_a}-PERP",
-                'b_symbol': f"{base_b}-PERP",
-                'lookback_days': cfg.get('lookback_days', 7),
-                'entry_z': cfg.get('entry_z', 1.5),
-                'exit_z': cfg.get('exit_z', 0.5),
-                'max_alloc_frac': cfg.get('max_alloc_frac', 0.2),
-                'is_open': False,
-                'current_side': None,  # 'long_spread' or 'short_spread'
-                'last_beta': 1.0,
-            })
+        # for idx, cfg in enumerate(_PAIRS_CONFIG):
+        #     base_a, base_b = cfg['legs']
+        #     # Legs include -USDT already; append -PERP only for futures
+        #     self.pairs.append({
+        #         'pair_id': f"{base_a}_{base_b}",  # Unique identifier for the pair
+        #         'a_symbol': f"{base_a}-PERP",
+        #         'b_symbol': f"{base_b}-PERP",
+        #         'lookback_days': cfg.get('lookback_days', 7),
+        #         'entry_z': cfg.get('entry_z', 1.5),
+        #         'exit_z': cfg.get('exit_z', 0.5),
+        #         'max_alloc_frac': cfg.get('max_alloc_frac', 0.2),
+        #         'is_open': False,
+        #         'current_side': None,  # 'long_spread' or 'short_spread'
+        #         'last_beta': 1.0,
+        #     })
