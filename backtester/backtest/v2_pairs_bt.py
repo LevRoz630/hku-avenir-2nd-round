@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent.parent))  # For 'from src.*' imports
 sys.path.append(str(Path(__file__).parent.parent / "src"))  # For 'from utils', 'from hist_data' imports within src
 
-from position_managers.v2_pairs_pm import PositionManager
+from position_managers.v3_pairs_pm import PositionManager
 from backtester import Backtester
 from strategies.v2_pairs import PairTradingStrategy, set_pairs_config
 # from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
@@ -55,9 +55,14 @@ def main():
     start_date = datetime.now(timezone.utc) - timedelta(days = 10)
     end_date = datetime.now(timezone.utc) - timedelta(days = 4)
 
-    position_manager = PositionManager()
+    position_manager = PositionManager(
+    portfolio_alloc_frac=0.8,
+    risk_method='min_volatility',
+    rebalance_threshold=0.15,  # 5% drift
+    pairs_config=pairs_config  # Optional but recommended
+)
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=10)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=180)
     
     results = backtester.run_backtest(
         strategy=strategy,

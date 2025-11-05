@@ -20,7 +20,7 @@ class PositionManager:
     
     def __init__(self, 
                  portfolio_alloc_frac: float = 0.8,
-                 risk_method: str = 'max_sharpe',
+                 risk_method: str = 'min_volatility',
                  min_lookback_days: int = 30):
         """
         Args:
@@ -114,46 +114,23 @@ class PositionManager:
             # For long spread: A has ratio=beta, B has ratio=1 → beta = max(ratios)
             ratios = [o.get('ratio') for o in open_orders if o.get('ratio') is not None]
             if not ratios:
-                logger.warning(f"Pair {pair_id} missing ratio values")
+                # If no open orders yet, we can still compute spread returns using pair_id
+                # Try to get beta from any order or use default
+                beta = 1.0  # Default beta if we can't determine
+            else:
+                beta = max(ratios)  # The larger ratio is always beta
+            
+            # Get symbols directly from pair_id (format: "APT-USDT_NEAR-USDT")
+            pair_parts = pair_id.split('_')
+            if len(pair_parts) != 2:
+                logger.warning(f"Pair {pair_id} has invalid format, expected 'BASE1_BASE2'")
                 continue
             
-            beta = max(ratios)  # The larger ratio is always beta
+            # Extract base symbols from pair_id
+            a_base = pair_parts[0].replace('-USDT', '')
+            b_base = pair_parts[1].replace('-USDT', '')
             
-            # Get the two unique symbols from orders
-            symbols = list(set([o['symbol'] for o in open_orders]))
-            if len(symbols) != 2:
-                logger.warning(f"Pair {pair_id} has {len(symbols)} symbols, expected 2")
-                continue
-            
-
-
-            # Identify which symbol is A and which is B
-            a_symbol = None
-            b_symbol = None
-            # Short spread: SHORT A (ratio=1), LONG B (ratio=beta)         
-            for order in open_orders:
-                if order.get('ratio') == 1:
-                    # Symbol with ratio=1: A in short spread, B in long spread
-                    if order['side'] == 'SHORT':
-                        a_symbol = order['symbol']
-                    else:  # LONG
-                        b_symbol = order['symbol']
-                elif order.get('ratio') == beta:
-                    # Symbol with ratio=beta: B in short spread, A in long spread
-                    if order['side'] == 'LONG':
-                        a_symbol = order['symbol']
-                    else:  # SHORT
-                        b_symbol = order['symbol']
-            
-            if not a_symbol or not b_symbol:
-                logger.warning(f"Could not identify symbols for pair {pair_id}")
-                continue
-            
-
-
             # Load historical data for both symbols
-            a_base = a_symbol.replace('-PERP', '')
-            b_base = b_symbol.replace('-PERP', '')
             
             # Get historical closes
             lookback_start = self.oms_client.current_time - timedelta(days=self.min_lookback_days)

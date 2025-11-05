@@ -179,7 +179,7 @@ class HistoricalDataCollector:
 
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = True, export: bool = False):
+                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = False, export: bool = False):
         """
         Unified wrapper function to load historical data for a specific time period.
         
