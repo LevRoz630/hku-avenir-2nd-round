@@ -22,7 +22,7 @@ class PositionManager:
     def __init__(self, 
                  portfolio_alloc_frac: float = 0.8,
                  risk_method: str = 'min_volatility',
-                 min_lookback_days: int = 30,
+                 min_lookback_days: int = 90,
                  rebalance_threshold: float = 0.05,
                  pairs_config: Optional[List[Dict[str, Any]]] = None):
         """
@@ -80,6 +80,10 @@ class PositionManager:
             
             # 3. Get existing positions and map to pairs
             existing_pair_positions = self._get_current_pair_positions()
+            
+            # Early return if no orders and no existing positions
+            if not open_orders and not existing_pair_positions:
+                return close_orders if close_orders else None
             
             # 4. Filter out repeated signals for pairs with existing positions
             # (unless they need rebalancing - we'll check that later)

@@ -62,7 +62,7 @@ def main():
     pairs_config=pairs_config  # Optional but recommended
 )
     backtester = Backtester()
-    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=180)
+    strategy = PairTradingStrategy(symbols=base_symbols, historical_data_dir=str(hist_dir), lookback_days=90)
     
     results = backtester.run_backtest(
         strategy=strategy,

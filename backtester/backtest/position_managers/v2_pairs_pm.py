@@ -21,7 +21,7 @@ class PositionManager:
     def __init__(self, 
                  portfolio_alloc_frac: float = 0.8,
                  risk_method: str = 'min_volatility',
-                 min_lookback_days: int = 30):
+                 min_lookback_days: int = 90):
         """
         Args:
             portfolio_alloc_frac: Maximum fraction of balance to allocate to all pairs (default 0.8 = 80%)
