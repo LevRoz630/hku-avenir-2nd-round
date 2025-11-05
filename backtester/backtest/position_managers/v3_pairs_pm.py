@@ -69,10 +69,19 @@ class PositionManager:
         self.oms_client = oms_client
         self.data_manager = data_manager
         
+        # Log timestamp and incoming orders
+        logger.info(f"\n{'='*80}")
+        logger.info(f"POSITION MANAGER - Timestamp: {oms_client.current_time}")
+        logger.info(f"{'='*80}")
+        logger.info(f"Incoming orders: {len(orders)} total")
+        
         try:
             # 1. Strategy CLOSE orders take precedence - pass through immediately
             close_orders = [o for o in orders if o.get('side') == 'CLOSE']
             open_orders = [o for o in orders if o.get('side') != 'CLOSE']
+            
+            logger.info(f"  - CLOSE orders: {len(close_orders)}")
+            logger.info(f"  - OPEN orders: {len(open_orders)}")
             
             # 2. Build pair registry from orders if not already initialized
             if not self.pair_registry:
@@ -81,8 +90,14 @@ class PositionManager:
             # 3. Get existing positions and map to pairs
             existing_pair_positions = self._get_current_pair_positions()
             
+            logger.info(f"Existing positions: {len(existing_pair_positions)} pairs")
+            for pair_id, pair_data in existing_pair_positions.items():
+                symbols = pair_data.get('symbols', [])
+                logger.info(f"  - {pair_id}: {len(symbols)} legs")
+            
             # Early return if no orders and no existing positions
             if not open_orders and not existing_pair_positions:
+                logger.info("No orders and no positions - returning early")
                 return close_orders if close_orders else None
             
             # 4. Filter out repeated signals for pairs with existing positions
@@ -105,6 +120,7 @@ class PositionManager:
             
             # 7. Calculate total portfolio value (capital base)
             total_portfolio_value = oms_client.update_portfolio_value()
+            logger.info(f"Total Portfolio Value: ${total_portfolio_value:,.2f}")
             
             # 8. Calculate optimal allocations for ALL pairs
             optimal_allocations = self._size_pairs(all_pairs_dict, total_portfolio_value)
@@ -113,8 +129,34 @@ class PositionManager:
                 logger.warning("No capital allocated to any pairs")
                 return close_orders if close_orders else None
             
+            # Log optimal allocations
+            logger.info(f"\nOPTIMAL ALLOCATIONS (from {self.risk_method}):")
+            total_optimal = sum(optimal_allocations.values())
+            for pair_id, alloc in sorted(optimal_allocations.items(), key=lambda x: x[1], reverse=True):
+                pct = (alloc / total_optimal * 100) if total_optimal > 0 else 0
+                logger.info(f"  {pair_id}: ${alloc:,.2f} ({pct:.1f}%)")
+            
             # 9. Calculate current allocations for existing pairs
             current_allocations = self._calculate_current_pair_allocations(existing_pair_positions)
+            
+            # Log current allocations
+            logger.info(f"\nCURRENT ALLOCATIONS:")
+            if current_allocations:
+                total_current = sum(current_allocations.values())
+                for pair_id, alloc in sorted(current_allocations.items(), key=lambda x: x[1], reverse=True):
+                    pct = (alloc / total_current * 100) if total_current > 0 else 0
+                    logger.info(f"  {pair_id}: ${alloc:,.2f} ({pct:.1f}%)")
+            else:
+                logger.info("  (no positions)")
+            
+            # Log allocation drift
+            logger.info(f"\nALLOCATION DRIFT:")
+            for pair_id in set(list(optimal_allocations.keys()) + list(current_allocations.keys())):
+                optimal = optimal_allocations.get(pair_id, 0)
+                current = current_allocations.get(pair_id, 0)
+                drift = optimal - current
+                drift_pct = (drift / optimal * 100) if optimal > 0 else 0
+                logger.info(f"  {pair_id}: drift=${drift:,.2f} ({drift_pct:+.1f}%)")
             
             # 10. Generate rebalancing orders (threshold-based)
             rebalance_orders = self._generate_rebalance_orders(
@@ -123,6 +165,14 @@ class PositionManager:
                 optimal_allocations,
                 close_orders  # Pass to avoid conflicts with strategy CLOSE
             )
+            
+            logger.info(f"\nREBALANCING:")
+            if rebalance_orders:
+                logger.info(f"  Generating {len(rebalance_orders)} rebalance orders")
+                for order in rebalance_orders:
+                    logger.info(f"    {order.get('side')} {order.get('symbol')} - ${order.get('value', 0):,.2f}")
+            else:
+                logger.info("  No rebalancing needed")
             
             # 11. Filter out new orders for pairs that already have positions (unless rebalancing)
             # If a pair has existing position and no rebalance needed, ignore new orders
@@ -144,10 +194,27 @@ class PositionManager:
             final_new_pairs_dict = self._group_orders_by_pair(final_new_orders)
             sized_new_orders = self._size_orders(final_new_pairs_dict, optimal_allocations)
             
+            logger.info(f"\nNEW TRADES:")
+            if sized_new_orders:
+                logger.info(f"  Generating {len(sized_new_orders)} new trade orders")
+                for order in sized_new_orders:
+                    logger.info(f"    {order.get('side')} {order.get('symbol')} - ${order.get('value', 0):,.2f}")
+            else:
+                logger.info("  No new trades")
+            
             # 13. Update state tracking
             self._update_pair_state(all_pairs_dict, optimal_allocations)
             
-            return close_orders + rebalance_orders + sized_new_orders
+            # Summary
+            final_orders = close_orders + rebalance_orders + sized_new_orders
+            logger.info(f"\nFINAL SUMMARY:")
+            logger.info(f"  Total orders to execute: {len(final_orders)}")
+            logger.info(f"    - CLOSE: {len(close_orders)}")
+            logger.info(f"    - REBALANCE: {len(rebalance_orders)}")
+            logger.info(f"    - NEW TRADES: {len(sized_new_orders)}")
+            logger.info(f"{'='*80}\n")
+            
+            return final_orders
             
         except Exception as e:
             logger.error(f"Error filtering orders: {e}", exc_info=True)
