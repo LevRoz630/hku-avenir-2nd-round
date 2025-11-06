@@ -241,6 +241,64 @@ def test_discrete_periods(log_prices: np.ndarray,
     }
 
 
+def _test_basket_sustainability(args):
+    """
+    Worker function to test a single basket's sustainability.
+    Combines rolling and discrete tests to reduce overhead.
+    Designed to be picklable for multiprocessing.
+    
+    Note: Uses max_workers=1 for windows/periods to avoid nested ProcessPoolExecutor issues.
+    Main parallelism is at basket level (processes multiple baskets simultaneously).
+    """
+    (basket_result, window_days, step_days, period_days, bars_per_day,
+     use_rolling, use_discrete, persistence_threshold, window_workers) = args
+    
+    try:
+        log_prices = basket_result['log_prices']
+        
+        # Test rolling windows (sequential within basket worker to avoid nested ProcessPoolExecutor)
+        rolling_result = None
+        if use_rolling:
+            rolling_result = test_rolling_windows(
+                log_prices, window_days, step_days, bars_per_day, max_workers=window_workers
+            )
+            
+            # Early termination: if rolling fails and both are required, skip discrete
+            if use_discrete and rolling_result['persistence_ratio'] < persistence_threshold:
+                return None
+        
+        # Test discrete periods
+        discrete_result = None
+        if use_discrete:
+            discrete_result = test_discrete_periods(
+                log_prices, period_days, bars_per_day, max_workers=window_workers
+            )
+        
+        # Determine if basket passes threshold
+        passes = False
+        if use_rolling and use_discrete:
+            passes = (rolling_result['persistence_ratio'] >= persistence_threshold and
+                     discrete_result['persistence_ratio'] >= persistence_threshold)
+        elif use_rolling:
+            passes = rolling_result['persistence_ratio'] >= persistence_threshold
+        elif use_discrete:
+            passes = discrete_result['persistence_ratio'] >= persistence_threshold
+        
+        if passes:
+            basket_result['sustainability'] = {
+                'rolling_windows': rolling_result,
+                'discrete_periods': discrete_result,
+                'persistence_threshold': persistence_threshold
+            }
+            return basket_result
+        
+        return None
+        
+    except Exception as e:
+        logger.debug(f"Error testing basket {basket_result.get('basket', 'unknown')}: {e}")
+        return None
+
+
 def filter_baskets_sustainability(baskets: List[Dict],
                                  price_data: pd.DataFrame,
                                  persistence_threshold: float = 0.7,
@@ -253,13 +311,14 @@ def filter_baskets_sustainability(baskets: List[Dict],
                                  max_workers: Optional[int] = None) -> List[Dict]:
     """
     Filter baskets by cointegration sustainability across time periods.
+    Now parallelized at basket level for significant speedup.
     
     Parameters:
     -----------
     baskets : List[Dict]
         List of basket dictionaries with keys: 'basket', 'johansen_result', 'eigenvector', 'spread', 'log_prices'
     price_data : pd.DataFrame
-        Price data with columns {symbol}_close
+        Price data with columns {symbol}_close (not used directly, kept for API compatibility)
     persistence_threshold : float
         Minimum persistence ratio to pass (default 0.7 = 70%)
     window_days : int
@@ -285,50 +344,46 @@ def filter_baskets_sustainability(baskets: List[Dict],
     if max_workers is None:
         max_workers = os.cpu_count() or 4
     
-    logger.info(f"Testing {len(baskets)} baskets for sustainability...")
+    if not baskets:
+        return []
+    
+    # Disable nested parallelism: windows/periods run sequentially within each basket worker
+    # Main parallelism is at basket level (biggest win)
+    window_workers = 1
+    
+    logger.info(f"Testing {len(baskets)} baskets for sustainability "
+               f"(parallelized at basket level with {max_workers} workers)...")
+    
+    # Prepare arguments for parallel processing
+    args_list = [
+        (basket_result, window_days, step_days, period_days, bars_per_day,
+         use_rolling, use_discrete, persistence_threshold, window_workers)
+        for basket_result in baskets
+    ]
     
     sustainable_baskets = []
     
-    for i, basket_result in enumerate(baskets):
-        basket = basket_result['basket']
-        log_prices = basket_result['log_prices']
+    # Process baskets in parallel
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_basket = {
+            executor.submit(_test_basket_sustainability, args): i
+            for i, args in enumerate(args_list)
+        }
         
-        # Test rolling windows
-        rolling_result = None
-        if use_rolling:
-            rolling_result = test_rolling_windows(
-                log_prices, window_days, step_days, bars_per_day, max_workers
-            )
-        
-        # Test discrete periods
-        discrete_result = None
-        if use_discrete:
-            discrete_result = test_discrete_periods(
-                log_prices, period_days, bars_per_day, max_workers
-            )
-        
-        # Determine if basket passes threshold
-        passes = False
-        if use_rolling and use_discrete:
-            # Both must pass threshold
-            passes = (rolling_result['persistence_ratio'] >= persistence_threshold and
-                     discrete_result['persistence_ratio'] >= persistence_threshold)
-        elif use_rolling:
-            passes = rolling_result['persistence_ratio'] >= persistence_threshold
-        elif use_discrete:
-            passes = discrete_result['persistence_ratio'] >= persistence_threshold
-        
-        if passes:
-            basket_result['sustainability'] = {
-                'rolling_windows': rolling_result,
-                'discrete_periods': discrete_result,
-                'persistence_threshold': persistence_threshold
-            }
-            sustainable_baskets.append(basket_result)
-        
-        if (i + 1) % 10 == 0:
-            logger.info(f"Processed {i + 1}/{len(baskets)} baskets, "
-                       f"found {len(sustainable_baskets)} sustainable so far")
+        completed = 0
+        for future in as_completed(future_to_basket):
+            completed += 1
+            try:
+                result = future.result()
+                if result is not None:
+                    sustainable_baskets.append(result)
+            except Exception as e:
+                basket_idx = future_to_basket[future]
+                logger.warning(f"Failed to test basket {basket_idx}: {e}")
+            
+            if completed % max(1, len(baskets) // 20) == 0:
+                logger.info(f"Processed {completed}/{len(baskets)} baskets, "
+                           f"found {len(sustainable_baskets)} sustainable so far")
     
     logger.info(f"Filtered to {len(sustainable_baskets)} sustainable baskets "
                f"(threshold: {persistence_threshold:.0%})")

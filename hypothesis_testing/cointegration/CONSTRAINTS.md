@@ -5,7 +5,7 @@
 ### Step 1: Initial Cointegration Test (`test_baskets_cointegration_parallel`)
 
 **Constraint**: Johansen Trace Test
-- **Threshold**: `p-value < 0.05` (hard constraint)
+- **Threshold**: `p-value < 0.01` (1% significance level, default)
 - **Test**: Tests H0: rank <= 0 (no cointegration) vs H1: rank > 0 (cointegration exists)
 - **Method**: Uses `coint_johansen` from statsmodels with:
   - `det_order = -1` (no deterministic terms)
@@ -16,7 +16,7 @@
   - Example: For basket of 4 assets, need at least 40 observations
 
 **What Gets Filtered Out**:
-- Baskets where Johansen test p-value >= 0.05
+- Baskets where Johansen test p-value >= 0.01
 - Baskets with insufficient data (< 10 observations per asset)
 - Baskets where trace statistic < critical value (5% level)
 
@@ -79,8 +79,8 @@
 ### Common Failure Reasons:
 
 1. **Too Strict Johansen Test**:
-   - p-value threshold of 0.05 may be too strict for crypto markets
-   - Try relaxing to 0.10 or checking trace statistic vs critical value
+   - p-value threshold of 0.01 may be too strict for crypto markets
+   - Try relaxing to 0.05 or checking trace statistic vs critical value
 
 2. **Insufficient Data**:
    - Need at least 10 observations per asset
@@ -115,10 +115,10 @@
 
 3. **Check Johansen Test Results**:
    - Add logging to see p-values before filtering
-   - Check if any baskets have p-value close to 0.05
+   - Check if any baskets have p-value close to 0.01
 
 4. **Relax Constraints Temporarily**:
-   - Try p-value < 0.10 instead of 0.05
+   - Try p-value < 0.05 instead of 0.01
    - Check how many pass with relaxed threshold
 
 5. **Test on Subset**:
@@ -135,5 +135,5 @@
 - **Step days**: 30
 - **Period days**: 90
 - **Half-life threshold**: 30.0 days
-- **Johansen p-value threshold**: 0.05 (hardcoded in `johansen_test.py`)
+- **Johansen p-value threshold**: 0.01 (1%, configurable in `johansen_test.py`)
 

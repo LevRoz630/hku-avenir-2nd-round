@@ -8,7 +8,8 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from scipy.stats import chi2
 
 
-def johansen_test(log_prices: np.ndarray, det_order: int = -1, k_ar_diff: int = 1) -> Dict:
+def johansen_test(log_prices: np.ndarray, det_order: int = -1, k_ar_diff: int = 1, 
+                  p_value_threshold: float = 0.01) -> Dict:
     """
     Perform Johansen cointegration test.
     
@@ -20,6 +21,8 @@ def johansen_test(log_prices: np.ndarray, det_order: int = -1, k_ar_diff: int = 
         Deterministic order: -1 (no deterministic), 0 (constant), 1 (linear trend)
     k_ar_diff : int
         Number of lags in the VAR model
+    p_value_threshold : float
+        P-value threshold for cointegration (default: 0.01 = 1%)
         
     Returns:
     --------
@@ -43,6 +46,6 @@ def johansen_test(log_prices: np.ndarray, det_order: int = -1, k_ar_diff: int = 
         'p_value': p_value,
         'eigenvalues': result.eig,
         'eigenvectors': result.evec,
-        'is_cointegrated': p_value < 0.05
+        'is_cointegrated': p_value < p_value_threshold
     }
 

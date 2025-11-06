@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def test_persistence_rolling(log_prices: np.ndarray, eigenvector: np.ndarray,
-                            window_days: int = 90, step_days: int = 30) -> float:
+                            window_days: int = 90, step_days: int = 30,
+                            p_value_threshold: float = 0.01) -> float:
     """
     Test cointegration persistence over rolling windows.
-    Returns persistence ratio (fraction of windows with p < 0.05).
+    Returns persistence ratio (fraction of windows with p < threshold).
     
     Parameters:
     -----------
@@ -27,6 +28,8 @@ def test_persistence_rolling(log_prices: np.ndarray, eigenvector: np.ndarray,
         Size of rolling window in days
     step_days : int
         Step size between windows in days
+    p_value_threshold : float
+        P-value threshold for cointegration (default: 0.01 = 1%)
         
     Returns:
     --------
@@ -47,7 +50,7 @@ def test_persistence_rolling(log_prices: np.ndarray, eigenvector: np.ndarray,
         window_data = log_prices[start:end]
         
         try:
-            result = johansen_test(window_data)
+            result = johansen_test(window_data, p_value_threshold=p_value_threshold)
             p_values.append(result['p_value'])
         except:
             p_values.append(1.0)  # Fail conservatively
@@ -55,6 +58,6 @@ def test_persistence_rolling(log_prices: np.ndarray, eigenvector: np.ndarray,
     if not p_values:
         return 0.0
     
-    persistence_ratio = sum(p < 0.05 for p in p_values) / len(p_values)
+    persistence_ratio = sum(p < p_value_threshold for p in p_values) / len(p_values)
     return persistence_ratio
 
