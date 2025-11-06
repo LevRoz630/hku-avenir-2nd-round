@@ -1,20 +1,40 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime, timedelta
 from hist_data import HistoricalDataCollector
 from oms_simulation import OMSClient
 
 logger = logging.getLogger(__name__)
 
 class V1LSPositionManager:
-    def __init__(self):
+    def __init__(
+        self,
+        max_alloc_frac: float = 2000.0,
+        ramp_up_days: int = 60,
+        start_alloc_frac: float = 200.0,
+    ):
+        """
+        Position manager with gradual allocation ramp-up.
+        
+        Args:
+            max_alloc_frac: Maximum allocation multiplier (default: 2000)
+            ramp_up_days: Days to reach max allocation (default: 60)
+            start_alloc_frac: Starting allocation multiplier (default: 200)
+        """
         self.orders = []
         self.oms_client = None
         self.data_manager = None
-        self.max_alloc_frac = 2000
+        self.max_alloc_frac = max_alloc_frac
+        self.ramp_up_days = ramp_up_days
+        self.start_alloc_frac = start_alloc_frac
+        self.start_time: Optional[datetime] = None
 
     def _set_oms_and_dm(self, oms_client: Any, data_manager: HistoricalDataCollector) -> None:
         self.oms_client = oms_client
         self.data_manager = data_manager
+        # Track start time on first call for ramp-up calculation
+        if self.start_time is None and oms_client.current_time is not None:
+            self.start_time = oms_client.current_time
 
     def _red_button(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -62,10 +82,38 @@ class V1LSPositionManager:
         return list(by_symbol.values())
 
 
+    def _get_current_alloc_multiplier(self) -> float:
+        """
+        Calculate current allocation multiplier based on elapsed time.
+        Ramps linearly from start_alloc_frac to max_alloc_frac over ramp_up_days.
+        """
+        if self.start_time is None or self.oms_client is None or self.oms_client.current_time is None:
+            return self.start_alloc_frac
+        
+        elapsed = self.oms_client.current_time - self.start_time
+        elapsed_days = elapsed.total_seconds() / 86400.0
+        
+        if elapsed_days <= 0:
+            return self.start_alloc_frac
+        
+        if elapsed_days >= self.ramp_up_days:
+            return self.max_alloc_frac
+        
+        # Linear interpolation
+        progress = elapsed_days / self.ramp_up_days
+        current_multiplier = self.start_alloc_frac + (
+            (self.max_alloc_frac - self.start_alloc_frac) * progress
+        )
+        
+        return current_multiplier
+
     def _set_weights(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not orders:
             return []
+        
+        current_multiplier = self._get_current_alloc_multiplier()
         sized: List[Dict[str, Any]] = []
+        
         for order in orders:
             side = order.get('side')
             # CLOSE orders don't need alloc_frac/value; pass through
@@ -74,7 +122,7 @@ class V1LSPositionManager:
                 continue
             alloc = order.get('alloc_frac', 0.0)
             try:
-                order['value'] = float(self.max_alloc_frac) * float(alloc)
+                order['value'] = float(current_multiplier) * float(alloc)
             except Exception:
                 order['value'] = 0.0
             sized.append(order)
