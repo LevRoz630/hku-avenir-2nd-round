@@ -2,17 +2,17 @@
 Parallel processing utilities for cointegration testing.
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import partial
 
-from .persistence import test_persistence_rolling
-from .spread_validator import compute_max_zscore
+# from .persistence import test_persistence_rolling  # Module doesn't exist
+# from .spread_validator import compute_max_zscore  # Module doesn't exist
 from .johansen_test import johansen_test
 from .basket_generator import compute_spread
+from .deduplicate_baskets import filter_overlapping_baskets
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,10 @@ def _test_baskets_batch(args):
 def test_baskets_cointegration_parallel(price_data: pd.DataFrame, 
                                         candidate_baskets: List[List[str]], 
                                         max_workers: Optional[int] = None,
-                                        batch_size: int = 100) -> List[Dict]:
+                                        batch_size: int = 100,
+                                        deduplicate: bool = True,
+                                        overlap_threshold: float = 0.5,
+                                        prefer_lower_pvalue: bool = True) -> List[Dict]:
     """
     Test baskets for cointegration in parallel with batching.
     Batches baskets per worker to reduce DataFrame reconstruction overhead.
@@ -90,6 +93,12 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
         Maximum number of worker processes. If None, uses CPU count.
     batch_size : int
         Number of baskets to test per worker batch. Larger = less overhead but less parallelism.
+    deduplicate : bool
+        If True, remove highly overlapping baskets after testing (default: True).
+    overlap_threshold : float
+        Overlap ratio threshold for deduplication (default: 0.5 = 50%).
+    prefer_lower_pvalue : bool
+        If True, prefer baskets with lower Johansen p-value when overlaps are removed.
         
     Returns:
     --------
@@ -101,7 +110,7 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
     
     import os
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
     # Convert DataFrame to dict for pickling (DataFrames can have pickling issues)
     price_data_dict = {
@@ -145,109 +154,20 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
                 logger.info(f"Processed {completed}/{total} batches ({completed * batch_size} baskets), "
                            f"found {len(cointegrated_baskets)} cointegrated so far")
     
+    if deduplicate and cointegrated_baskets:
+        before = len(cointegrated_baskets)
+        cointegrated_baskets = filter_overlapping_baskets(
+            cointegrated_baskets,
+            overlap_threshold=overlap_threshold,
+            prefer_lower_pvalue=prefer_lower_pvalue,
+        )
+        removed = before - len(cointegrated_baskets)
+        logger.info(
+            "Deduplicated cointegrated baskets: %d kept, %d removed (threshold %.0f%%)",
+            len(cointegrated_baskets),
+            removed,
+            overlap_threshold * 100,
+        )
+
     return cointegrated_baskets
-
-
-def _test_basket_constraints(args):
-    """
-    Worker function for testing basket constraints.
-    Designed to be picklable for multiprocessing.
-    """
-    basket_result, basket_size = args
-    
-    try:
-        # Convert numpy arrays to ensure proper pickling
-        import numpy as np
-        log_prices = np.array(basket_result['log_prices'])
-        eigenvector = np.array(basket_result['eigenvector'])
-        spread = np.array(basket_result['spread'])
-        
-        # Check max z-score first (cheaper)
-        max_z = compute_max_zscore(spread, lookback_days=90)
-        
-        # Size-dependent thresholds
-        persistence_threshold = 0.8 - 0.1 * max(0, basket_size - 2)
-        z_threshold = 3.0 + 0.5 * max(0, basket_size - 2)
-        
-        # Early termination if z-score fails
-        if max_z >= z_threshold:
-            return None
-        
-        # Test persistence (more expensive)
-        persistence = test_persistence_rolling(log_prices, eigenvector, window_days=90, step_days=30)
-        
-        # Final check
-        if persistence > persistence_threshold:
-            # Create new dict with results (don't modify original)
-            result = {
-                'basket': basket_result['basket'],
-                'johansen_result': basket_result['johansen_result'],
-                'eigenvector': eigenvector,
-                'spread': spread,
-                'log_prices': log_prices,
-                'persistence': persistence,
-                'max_zscore': max_z,
-                'persistence_threshold': persistence_threshold,
-                'z_threshold': z_threshold
-            }
-            return result
-        
-        return None
-        
-    except Exception as e:
-        logger.debug(f"Error testing basket {basket_result.get('basket', 'unknown')}: {e}")
-        return None
-
-
-def test_baskets_parallel(cointegrated_baskets: List[Dict], max_workers: Optional[int] = None) -> List[Dict]:
-    """
-    Test persistence and spread constraints in parallel.
-    
-    Parameters:
-    -----------
-    cointegrated_baskets : List[Dict]
-        List of basket results from initial cointegration test
-    max_workers : Optional[int]
-        Maximum number of worker processes. If None, uses CPU count.
-        
-    Returns:
-    --------
-    List[Dict]
-        List of baskets that passed all constraints
-    """
-    if not cointegrated_baskets:
-        return []
-    
-    # Prepare arguments (basket_result, basket_size)
-    args_list = [(basket_result, len(basket_result['basket'])) 
-                 for basket_result in cointegrated_baskets]
-    
-    valid_baskets = []
-    
-    # Use ProcessPoolExecutor for parallel processing
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_basket = {
-            executor.submit(_test_basket_constraints, args): args[0]['basket']
-            for args in args_list
-        }
-        
-        # Collect results as they complete
-        completed = 0
-        total = len(args_list)
-        
-        for future in as_completed(future_to_basket):
-            completed += 1
-            try:
-                result = future.result()
-                if result is not None:
-                    valid_baskets.append(result)
-            except Exception as e:
-                basket = future_to_basket[future]
-                logger.warning(f"Failed to test basket {basket}: {e}")
-            
-            if completed % 10 == 0:
-                logger.info(f"Processed {completed}/{total} baskets, found {len(valid_baskets)} valid so far")
-    
-    return valid_baskets
 

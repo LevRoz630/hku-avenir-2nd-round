@@ -102,12 +102,34 @@ def _compute_adf_test(spread: np.ndarray) -> Dict:
 def _test_basket_mean_reversion(args):
     """
     Worker function to compute mean reversion metrics for a single basket.
+    Uses half_life_data to recompute spread (prevents data leakage).
     Designed to be picklable for multiprocessing.
     """
-    basket_result, half_life_threshold_days, bars_per_day = args
+    basket_result, half_life_data_dict, half_life_threshold_days, bars_per_day = args
     
     try:
-        spread = np.array(basket_result['spread'])
+        # Reconstruct half_life_data DataFrame
+        half_life_data = pd.DataFrame(
+            half_life_data_dict['data'],
+            index=pd.DatetimeIndex(half_life_data_dict['index']),
+            columns=half_life_data_dict['columns']
+        )
+        
+        # Extract basket prices from half_life_data
+        basket = basket_result['basket']
+        basket_cols = [f'{sym}_close' for sym in basket]
+        
+        if not all(col in half_life_data.columns for col in basket_cols):
+            return None
+        
+        basket_prices = half_life_data[basket_cols].values
+        
+        # Convert to log prices
+        log_prices = np.log(basket_prices)
+        
+        # Recompute spread using eigenvector from cointegration test
+        eigenvector = np.array(basket_result['eigenvector'])
+        spread = log_prices @ eigenvector
         
         # Compute half-life
         half_life_periods = _compute_half_life(spread)
@@ -135,16 +157,20 @@ def _test_basket_mean_reversion(args):
 
 
 def filter_baskets_mean_reversion(baskets: List[Dict],
+                                  half_life_data: pd.DataFrame,
                                   half_life_threshold_days: float = 30.0,
                                   bars_per_day: int = 24,
                                   max_workers: Optional[int] = None) -> List[Dict]:
     """
     Filter baskets by mean reversion speed.
+    Uses separate half_life_data to recompute spreads (prevents data leakage).
     
     Parameters:
     -----------
     baskets : List[Dict]
-        List of basket dictionaries with 'spread' key
+        List of basket dictionaries with 'eigenvector' key (from cointegration test)
+    half_life_data : pd.DataFrame
+        Price data for half-life testing (should be separate from cointegration data)
     half_life_threshold_days : float
         Maximum half-life in days to pass filter (default 30 days)
     bars_per_day : int
@@ -158,13 +184,21 @@ def filter_baskets_mean_reversion(baskets: List[Dict],
         Filtered baskets with added 'mean_reversion' metrics
     """
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
-    logger.info(f"Testing {len(baskets)} baskets for mean reversion speed...")
+    logger.info(f"Testing {len(baskets)} baskets for mean reversion speed "
+               f"(using separate half-life data: {len(half_life_data)} samples)...")
+    
+    # Convert DataFrame to dict for pickling
+    half_life_data_dict = {
+        'data': half_life_data.values,
+        'index': half_life_data.index.values,
+        'columns': half_life_data.columns.tolist()
+    }
     
     # Prepare arguments for parallel processing
     args_list = [
-        (basket_result, half_life_threshold_days, bars_per_day)
+        (basket_result, half_life_data_dict, half_life_threshold_days, bars_per_day)
         for basket_result in baskets
     ]
     

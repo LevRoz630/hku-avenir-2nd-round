@@ -1,101 +1,78 @@
 # Cointegration Testing Workflow
 
-## Purpose
-Identify cryptocurrency baskets suitable for pairs trading strategies with stable long-term cointegration relationships. The workflow filters candidate baskets through multiple statistical tests to ensure they exhibit persistent cointegration and fast mean reversion.
+## Overview
+This workflow identifies cryptocurrency baskets suitable for pairs trading strategies with stable long-term cointegration relationships. **Critical**: Data is split chronologically to prevent overfitting and data leakage.
 
-## Inputs
+## Data Splitting Strategy
 
-### Data Files
-- **Location**: `hku-data/test_data/`
-- **Format**: Parquet files ONLY (CSV files are ignored)
-- **Pattern**: `perpetual_{SYMBOL}_{index|mark}_{timeframe}_*.parquet`
-  - Example: `perpetual_BTC_index_1h_20240101_20241231.parquet`
-  - Example: `perpetual_ETH_mark_15m_20240101_20241231.parquet`
-- **Columns**: Must contain `timestamp` and `close` columns
-- **Data Type**: Perpetual futures price data (index or mark prices)
+To prevent overfitting, data is split chronologically into three separate datasets:
 
-### Configuration Parameters
-- `timeframe`: '1h' (index) or '15m' (mark)
-- `price_type`: 'index' or 'mark'
-- `symbols`: Optional list to filter, or None to auto-discover all
-- `MIN_BASKET_SIZE`: Minimum number of assets in basket (default: 2)
-- `MAX_BASKET_SIZE`: Maximum number of assets in basket (default: 4)
-- `N_CLUSTERS`: Number of clusters for basket generation (default: 5)
-- `PERSISTENCE_THRESHOLD`: Minimum persistence ratio (default: 0.7 = 70%)
-- `HALF_LIFE_THRESHOLD_DAYS`: Maximum half-life in days (default: 30.0)
+1. **Cluster Data** (1.0-0.8 quantile): Most recent 20% of data
+   - Used for: Basket generation via clustering
+   - Why: Uses most recent market structure to find correlated assets
+
+2. **Cointegration Data** (0.8-0.2 quantile): Middle 60% of data  
+   - Used for: Initial cointegration testing and sustainability filtering
+   - Why: Tests baskets on unseen data (not used for clustering)
+
+3. **Half-life Data** (0.2-0.0 quantile): Oldest 20% of data
+   - Used for: Mean reversion speed testing
+   - Why: Final validation on completely separate data
 
 ## Pipeline Steps
 
-### 1. Load Price Data
-- **Input**: Parquet files from `hku-data/test_data/`
+### Step 1: Load Price Data
+- Load historical price data from parquet files
+- Align timestamps across all symbols
+- Filter symbols with >5% missing data
+
+### Step 2: Split Data Chronologically
+- Split into cluster_data, cointegration_data, half_life_data
+- Ensures no data leakage between steps
+
+### Step 3: Generate Candidate Baskets
+- **Input**: cluster_data (1.2 - 0.8)
+- **Process**: Hierarchical clustering on correlation matrix
+- **Output**: List of candidate basket combinations
+- **Why separate data**: Prevents overfitting - baskets generated on different data than tested
+
+### Step 4: Test Initial Cointegration
+- **Input**: candidate_baskets, cointegration_data (middle 60%)
+- **Process**: Johansen trace test (p-value < 0.01)
+- **Output**: Cointegrated baskets with eigenvectors
+- **Deduplication**: Remove baskets with >50% overlap
+
+### Step 5: Filter by Sustainability
+- **Input**: cointegrated_baskets, cointegration_data
 - **Process**: 
-  - Parallel loading of matching parquet files
-  - Timestamp alignment across symbols
-  - Forward fill gaps (max 1 day)
-  - Filter symbols with >5% missing data
-- **Output**: Aligned DataFrame with columns `{symbol}_close`, timestamp index
+  - Rolling windows: Test cointegration across overlapping windows
+  - Discrete periods: Test cointegration across non-overlapping periods
+- **Filter**: ≥70% of windows/periods must pass cointegration test
+- **Output**: Sustainable baskets
 
-### 2. Generate Candidate Baskets
-- **Input**: Price data DataFrame
-- **Process**: Clustering-based basket generation (parallel)
-- **Output**: List of candidate basket symbol combinations
-
-### 3. Test Initial Cointegration
-- **Input**: Candidate baskets, price data
-- **Process**: Johansen trace test (multiprocessed, batch processing)
-- **Filter**: Only baskets passing cointegration test (p-value threshold)
-- **Output**: List of cointegrated baskets with eigenvectors and test statistics
-
-### 4. Filter by Sustainability
-- **Input**: Cointegrated baskets, price data
+### Step 6: Filter by Mean Reversion Speed
+- **Input**: sustainable_baskets, half_life_data (oldest 20%)
 - **Process**: 
-  - Rolling window test: Test cointegration across overlapping windows
-  - Discrete period test: Test cointegration across non-overlapping periods
-- **Filters**:
-  - `PERSISTENCE_THRESHOLD`: Minimum ratio of windows/periods that must pass (default: 70%)
-  - `WINDOW_DAYS`: Rolling window size (default: 90 days)
-  - `STEP_DAYS`: Rolling window step size (default: 30 days)
-  - `PERIOD_DAYS`: Discrete period size (default: 90 days)
-- **Output**: Sustainable baskets with persistence ratios
+  - Recompute spreads from half_life_data using eigenvectors
+  - Compute half-life and ADF test
+- **Filter**: Half-life < 30 days OR ADF p-value < 0.01
+- **Output**: Fast mean-reverting baskets
+- **Why separate data**: Prevents data leakage - tests on completely unseen data
 
-### 5. Filter by Mean Reversion Speed
-- **Input**: Sustainable baskets, price data
-- **Process**: 
-  - Compute spread time series
-  - Estimate half-life using AR(1) model
-  - ADF test for stationarity
-- **Filter**: `HALF_LIFE_THRESHOLD_DAYS`: Maximum half-life (default: 30 days)
-- **Output**: Fast mean-reverting baskets with half-life statistics
+### Step 7: Save Validated Baskets
+- Export to JSON for strategy deployment
 
-### 6. Output Validated Baskets
-- **Input**: Fast mean-reverting baskets
-- **Process**: Serialize to JSON format
-- **Output**: `validated_baskets.json` file
+## Key Improvements
 
-## Outputs
+1. **No Overfitting**: Each step uses different data
+2. **No Look-ahead Bias**: Clustering uses recent data, testing uses older data
+3. **No Data Leakage**: Half-life computed on separate dataset
+4. **Realistic Validation**: Tests baskets on truly unseen data
 
-### validated_baskets.json
-JSON file containing:
-- `timestamp`: Generation timestamp
-- `config`: Configuration parameters used
-- `baskets`: Array of validated baskets, each with:
-  - `basket`: List of symbol names
-  - `eigenvector`: Cointegration eigenvector (weights)
-  - `johansen_p_value`: Johansen test p-value
-  - `johansen_trace_stat`: Johansen trace statistic
-  - `sustainability_rolling`: Rolling windows persistence ratio
-  - `sustainability_discrete`: Discrete periods persistence ratio
-  - `half_life_days`: Mean reversion half-life in days
-  - `adf_p_value`: Augmented Dickey-Fuller test p-value
-  - `is_stationary`: Stationarity flag
+## Configuration
 
-## Filters Summary
-
-1. **Cointegration Filter**: Johansen trace test - ensures long-term equilibrium relationship exists
-2. **Sustainability Filter**: Persistence across time windows - ensures relationship is stable, not just in-sample
-3. **Mean Reversion Filter**: Half-life threshold - ensures spread reverts quickly enough for profitable trading
-
-## Usage Example
-
-See `test_cointegration_framework.ipynb` for complete implementation example.
-
+- **P-value threshold**: 0.01 (1% significance)
+- **Persistence threshold**: 0.7 (70% of windows must pass)
+- **Half-life threshold**: 30 days
+- **Max combinations per cluster**: 4000
+- **Workers**: 90% of CPU count (leaves headroom for OS)

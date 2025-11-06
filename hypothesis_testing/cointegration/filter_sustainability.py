@@ -91,7 +91,7 @@ def test_rolling_windows(log_prices: np.ndarray,
     dict with keys: 'persistence_ratio', 'windows_passed', 'total_windows', 'window_results'
     """
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
     window_bars = window_days * bars_per_day
     step_bars = step_days * bars_per_day
@@ -178,7 +178,7 @@ def test_discrete_periods(log_prices: np.ndarray,
     dict with keys: 'persistence_ratio', 'periods_passed', 'total_periods', 'period_results'
     """
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
     period_bars = period_days * bars_per_day
     
@@ -342,7 +342,7 @@ def filter_baskets_sustainability(baskets: List[Dict],
         Filtered baskets with added 'sustainability' metrics
     """
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
     if not baskets:
         return []

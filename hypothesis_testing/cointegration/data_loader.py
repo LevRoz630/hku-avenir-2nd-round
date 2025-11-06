@@ -100,7 +100,7 @@ def load_price_data(data_dir: Path, symbols: Optional[List[str]] = None,
         Aligned price data with timestamp index, columns are {symbol}_close
     """
     if max_workers is None:
-        max_workers = os.cpu_count() or 4
+        max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
     
     # Determine file pattern based on timeframe and price_type
     if price_type == 'index':

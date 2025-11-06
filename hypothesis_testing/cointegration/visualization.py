@@ -2,7 +2,7 @@
 Visualization and reporting for cointegration results.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
