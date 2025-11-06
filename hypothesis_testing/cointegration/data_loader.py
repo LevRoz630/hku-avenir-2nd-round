@@ -1,6 +1,7 @@
 """
 Data loading module for cointegration testing.
-Supports parquet files from hku-data directory (perpetual futures).
+Loads parquet files ONLY from hku-data directory (perpetual futures).
+All CSV files are ignored - only .parquet files are processed.
 """
 
 from pathlib import Path
@@ -24,11 +25,9 @@ def _load_single_parquet_file(args):
     file_path, symbol, cutoff_date, price_column = args
     
     try:
-        # Try pyarrow first, fallback to fastparquet
-        try:
-            df = pd.read_parquet(file_path, engine='pyarrow')
-        except (ImportError, ValueError):
-            df = pd.read_parquet(file_path, engine='fastparquet')
+
+        df = pd.read_parquet(file_path, engine='pyarrow')
+
         
         # Ensure timestamp column exists and is datetime
         if 'timestamp' not in df.columns:
@@ -70,13 +69,15 @@ def load_price_data(data_dir: Path, symbols: Optional[List[str]] = None,
                     price_type: str = 'index',
                     max_workers: Optional[int] = None) -> pd.DataFrame:
     """
-    Load price data from parquet files (perpetual futures).
+    Load price data from parquet files ONLY (perpetual futures).
+    CSV files are ignored - only .parquet files matching the pattern are loaded.
     Returns aligned DataFrame with columns: {symbol}_close, ...
     
     Parameters:
     -----------
     data_dir : Path
         Directory containing parquet files (e.g., "../hku-data/test_data")
+        Only .parquet files are processed; CSV files are ignored.
     symbols : Optional[List[str]]
         Optional list of symbols to filter (e.g., ["BTC", "ETH"])
         If None, discovers all available symbols from parquet files
@@ -111,10 +112,24 @@ def load_price_data(data_dir: Path, symbols: Optional[List[str]] = None,
     else:
         raise ValueError(f"Invalid price_type: {price_type}, must be 'index' or 'mark'")
     
-    parquet_files = list(data_dir.glob(pattern))
+    parquet_files = [f for f in data_dir.glob(pattern) if f.suffix == '.parquet']
     
     if not parquet_files:
-        raise ValueError(f"No parquet files found matching pattern: {pattern}")
+        # Check if directory exists and has any files
+        if not data_dir.exists():
+            raise ValueError(f"Data directory does not exist: {data_dir}")
+        all_files = list(data_dir.glob("*"))
+        csv_files = [f for f in all_files if f.suffix == '.csv']
+        other_parquet = [f for f in all_files if f.suffix == '.parquet']
+        if csv_files:
+            logger.warning(f"Found {len(csv_files)} CSV files in {data_dir} - these are ignored. Only parquet files are loaded.")
+        if other_parquet and not parquet_files:
+            raise ValueError(f"No parquet files found matching pattern '{pattern}' in {data_dir}. "
+                           f"Found {len(other_parquet)} other parquet files. "
+                           f"Expected pattern: perpetual_{{SYMBOL}}_{price_type}_{timeframe}_*.parquet")
+        elif not other_parquet:
+            raise ValueError(f"No parquet files found in {data_dir}. "
+                           f"Expected pattern: perpetual_{{SYMBOL}}_{price_type}_{timeframe}_*.parquet")
     
     # Extract symbols from filenames if not provided
     if symbols:
@@ -144,8 +159,12 @@ def load_price_data(data_dir: Path, symbols: Optional[List[str]] = None,
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=int(365 * years_back))
     
     # Prepare arguments for parallel loading
+    # Ensure all files are parquet (double-check)
     args_list = []
     for parquet_file in parquet_files:
+        if parquet_file.suffix != '.parquet':
+            logger.warning(f"Skipping non-parquet file: {parquet_file.name}")
+            continue
         # Extract symbol from filename
         parts = parquet_file.stem.split('_')
         symbol = parts[1] if len(parts) >= 2 else parquet_file.stem
