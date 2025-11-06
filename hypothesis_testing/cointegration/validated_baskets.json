@@ -1,0 +1,61 @@
+{
+  "timestamp": "2025-11-06T14:07:21.953084+00:00",
+  "config": {
+    "timeframe": "15m",
+    "price_type": "mark",
+    "persistence_threshold": 0.7,
+    "half_life_threshold_days": 30.0
+  },
+  "baskets": [
+    {
+      "basket": [
+        "GRT",
+        "NEAR",
+        "RENDER",
+        "ICP",
+        "FIL",
+        "SAND"
+      ],
+      "eigenvector": [
+        1.0,
+        -2.2259517372742468,
+        0.22251563242529243,
+        0.29833608711989634,
+        2.1591345958462593,
+        -1.1590662893814083
+      ],
+      "johansen_p_value": 2.220446049250313e-16,
+      "johansen_trace_stat": 85.68210967342617,
+      "sustainability_rolling": 1.0,
+      "sustainability_discrete": 1.0,
+      "half_life_days": 6.6,
+      "adf_p_value": 0.0005782196474480377,
+      "is_stationary": true
+    },
+    {
+      "basket": [
+        "ETC",
+        "ENS",
+        "COMP",
+        "AAVE",
+        "JTO",
+        "UNI"
+      ],
+      "eigenvector": [
+        1.0,
+        -0.4515985147319281,
+        -0.8644287597083249,
+        -0.013228636053377187,
+        -1.0774576348575555,
+        1.390655453401921
+      ],
+      "johansen_p_value": 6.373768179912531e-11,
+      "johansen_trace_stat": 59.25598470523018,
+      "sustainability_rolling": 1.0,
+      "sustainability_discrete": 1.0,
+      "half_life_days": 6.6,
+      "adf_p_value": 0.002068363929336389,
+      "is_stationary": true
+    }
+  ]
+}

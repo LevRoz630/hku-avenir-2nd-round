@@ -1,0 +1,69 @@
+{
+  "config": {
+    "timeframe": "15m",
+    "price_type": "mark",
+    "persistence_threshold": 0.7,
+    "half_life_threshold_days": 30.0
+  },
+  "objective": "sharpe",
+  "optimization_results": [
+    {
+      "basket": [
+        "GRT",
+        "NEAR",
+        "RENDER",
+        "ICP",
+        "FIL",
+        "SAND"
+      ],
+      "optimal_params": {
+        "entry_threshold": 1.0,
+        "exit_threshold": 0.0,
+        "lookback_days": 30,
+        "total_trades": 24,
+        "winning_trades": 22,
+        "losing_trades": 2,
+        "total_pnl": 2.1341049128924645,
+        "avg_pnl": 0.08892103803718603,
+        "win_rate": 0.9166666666666666,
+        "avg_win": 0.10404541731275208,
+        "avg_loss": -0.07744713399404057,
+        "sharpe_ratio": 10.555064396331721,
+        "max_drawdown": 0.10089251489461937,
+        "total_return": 2.1341049128924645,
+        "avg_hold_days": 3.1236979166666665
+      },
+      "total_combinations_tested": 18,
+      "min_trades_filter": 20
+    },
+    {
+      "basket": [
+        "ETC",
+        "ENS",
+        "COMP",
+        "AAVE",
+        "JTO",
+        "UNI"
+      ],
+      "optimal_params": {
+        "entry_threshold": 1.0,
+        "exit_threshold": 0.0,
+        "lookback_days": 45,
+        "total_trades": 21,
+        "winning_trades": 20,
+        "losing_trades": 1,
+        "total_pnl": 1.9673735346159698,
+        "avg_pnl": 0.0936844540293319,
+        "win_rate": 0.9523809523809523,
+        "avg_win": 0.10089045969516959,
+        "avg_loss": -0.050435659287422,
+        "sharpe_ratio": 20.97132956588775,
+        "max_drawdown": 0.050435659287422,
+        "total_return": 1.9673735346159698,
+        "avg_hold_days": 3.174107142857143
+      },
+      "total_combinations_tested": 20,
+      "min_trades_filter": 20
+    }
+  ]
+}

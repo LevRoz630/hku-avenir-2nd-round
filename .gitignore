@@ -131,7 +131,6 @@ dmypy.json
 # Project-specific
 .historical_data/
 historical_data/
-*.json
 *.parquet
 *.csv
 *.xlsx

@@ -307,16 +307,46 @@ def main():
             print(f"  Error: {result['error']}")
         print()
     
-    # Save results
+    # Save results to JSON
     output_file = Path(__file__).parent / args.output
-    with open(output_file, 'w') as f:
-        json.dump({
-            'config': config,
-            'objective': 'sharpe',
-            'optimization_results': optimization_results
-        }, f, indent=2, default=str)
     
-    print(f"✓ Results saved to {output_file}")
+    # Prepare data for JSON serialization (convert numpy types)
+    def convert_to_json_serializable(obj):
+        """Convert numpy types to native Python types for JSON."""
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        return obj
+    
+    serializable_results = convert_to_json_serializable(optimization_results)
+    
+    output_data = {
+        'timestamp': pd.Timestamp.now().isoformat(),
+        'config': config,
+        'min_trades_filter': args.min_trades,
+        'objective': 'sharpe',
+        'test_data_info': {
+            'samples': len(test_data),
+            'start_date': test_data.index.min().isoformat() if len(test_data) > 0 else None,
+            'end_date': test_data.index.max().isoformat() if len(test_data) > 0 else None
+        },
+        'optimization_results': serializable_results
+    }
+    
+    with open(output_file, 'w') as f:
+        json.dump(output_data, f, indent=2, default=str)
+    
+    print(f"\n✓ Results saved to {output_file}")
+    print(f"  Optimized {len(optimization_results)} baskets")
 
 
 if __name__ == "__main__":
