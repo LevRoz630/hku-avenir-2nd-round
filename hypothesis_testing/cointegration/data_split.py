@@ -56,6 +56,16 @@ def split_data_chronologically(price_data: pd.DataFrame,
     price_data_sorted = price_data.sort_index(ascending=False)
     n_total = len(price_data_sorted)
     
+    if n_total == 0:
+        raise ValueError("price_data is empty")
+    
+    # Validate split ranges don't overlap incorrectly
+    if cluster_split[1] > cointegration_split[0]:
+        raise ValueError(f"Cluster and cointegration splits overlap: cluster ends at {cluster_split[1]}, cointegration starts at {cointegration_split[0]}")
+    
+    if cointegration_split[1] > test_split[0]:
+        raise ValueError(f"Cointegration and test splits overlap: cointegration ends at {cointegration_split[1]}, test starts at {test_split[0]}")
+    
     # Clamp cluster_split[0] to max 1.0 (can't go beyond most recent)
     cluster_start_quantile = min(cluster_split[0], 1.0)
     
@@ -68,6 +78,16 @@ def split_data_chronologically(price_data: pd.DataFrame,
     
     test_start_idx = int(n_total * (1.0 - test_split[0]))
     test_end_idx = int(n_total * (1.0 - test_split[1]))
+    
+    # Validate indices are valid
+    if cluster_start_idx < 0 or cluster_end_idx > n_total or cluster_start_idx >= cluster_end_idx:
+        raise ValueError(f"Invalid cluster split indices: start={cluster_start_idx}, end={cluster_end_idx}, total={n_total}")
+    
+    if cointegration_start_idx < 0 or cointegration_end_idx > n_total or cointegration_start_idx >= cointegration_end_idx:
+        raise ValueError(f"Invalid cointegration split indices: start={cointegration_start_idx}, end={cointegration_end_idx}, total={n_total}")
+    
+    if test_start_idx < 0 or test_end_idx > n_total or test_start_idx >= test_end_idx:
+        raise ValueError(f"Invalid test split indices: start={test_start_idx}, end={test_end_idx}, total={n_total}")
     
     # Extract splits (most recent first, so we slice from start)
     cluster_data = price_data_sorted.iloc[cluster_start_idx:cluster_end_idx].sort_index(ascending=True)

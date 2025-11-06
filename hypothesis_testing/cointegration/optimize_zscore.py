@@ -122,8 +122,11 @@ def simulate_trades(spread: np.ndarray,
         periods_per_year = 365.0 / (total_days / len(positions) + 1e-10)
         
         # Annualized Sharpe: sqrt(periods_per_year) * mean_return / std_return
-        if std_return > 0:
+        if std_return > 0 and np.isfinite(std_return) and np.isfinite(mean_return):
             sharpe = np.sqrt(periods_per_year) * mean_return / std_return
+            # Validate sharpe
+            if np.isnan(sharpe) or np.isinf(sharpe):
+                sharpe = 0.0
         else:
             sharpe = 0.0
     else:
@@ -179,8 +182,29 @@ def optimize_zscore_params(basket_data: Dict,
         return {'error': 'Missing columns'}
     
     basket_prices = test_data[basket_cols].values
+    
+    # Validate prices
+    if np.any(basket_prices <= 0):
+        return {'error': 'Non-positive prices'}
+    
+    if np.any(np.isnan(basket_prices)) or np.any(np.isinf(basket_prices)):
+        return {'error': 'NaN/Inf in prices'}
+    
     log_prices = np.log(basket_prices)
+    
+    # Validate log prices
+    if np.any(np.isnan(log_prices)) or np.any(np.isinf(log_prices)):
+        return {'error': 'NaN/Inf in log prices'}
+    
+    # Validate eigenvector
+    if np.any(np.isnan(eigenvector)) or np.any(np.isinf(eigenvector)):
+        return {'error': 'NaN/Inf in eigenvector'}
+    
     spread = log_prices @ eigenvector
+    
+    # Validate spread
+    if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
+        return {'error': 'NaN/Inf in spread'}
     
     # Test all parameter combinations
     results = []

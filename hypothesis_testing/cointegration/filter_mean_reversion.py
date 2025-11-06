@@ -34,25 +34,54 @@ def _compute_half_life(spread: np.ndarray) -> float:
     if len(spread) < 2:
         return np.inf
     
+    # Check for NaN/Inf values
+    if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
+        return np.inf
+    
+    # Minimum sample size for meaningful half-life estimation
+    if len(spread) < 10:
+        return np.inf
+    
     # De-mean the spread
     spread_demeaned = spread - np.mean(spread)
+    
+    # Check variance after de-meaning
+    if np.var(spread_demeaned) == 0:
+        return np.inf
     
     # Create lagged series
     spread_lag = spread_demeaned[:-1]
     spread_diff = np.diff(spread_demeaned)
     
+    # Check for NaN/Inf in derived series
+    if np.any(np.isnan(spread_lag)) or np.any(np.isnan(spread_diff)):
+        return np.inf
+    
     # OLS regression: spread_diff = theta * spread_lag + epsilon
-    if np.var(spread_lag) == 0:
+    var_lag = np.var(spread_lag)
+    if var_lag == 0 or np.isnan(var_lag) or np.isinf(var_lag):
         return np.inf
     
     theta = np.dot(spread_lag, spread_diff) / np.dot(spread_lag, spread_lag)
+    
+    # Validate theta
+    if np.isnan(theta) or np.isinf(theta):
+        return np.inf
     
     # Ensure theta is valid for mean reversion (0 < theta < 1)
     if theta <= 0 or theta >= 1:
         return np.inf
     
     # Half-life = -log(2) / log(theta)
-    half_life = -np.log(2) / np.log(theta)
+    log_theta = np.log(theta)
+    if np.isnan(log_theta) or np.isinf(log_theta) or log_theta >= 0:
+        return np.inf
+    
+    half_life = -np.log(2) / log_theta
+    
+    # Validate result
+    if np.isnan(half_life) or np.isinf(half_life) or half_life <= 0:
+        return np.inf
     
     return half_life
 
@@ -77,18 +106,43 @@ def _compute_adf_test(spread: np.ndarray) -> Dict:
             'is_stationary': False
         }
     
+    # Check for NaN/Inf values
+    if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
+        return {
+            'adf_statistic': np.nan,
+            'p_value': 1.0,
+            'is_stationary': False
+        }
+    
+    # Check variance
+    if np.var(spread) == 0:
+        return {
+            'adf_statistic': np.nan,
+            'p_value': 1.0,
+            'is_stationary': False
+        }
+    
     try:
         # ADF test with automatic lag selection
         result = adfuller(spread, autolag='AIC')
         
         adf_statistic = result[0]
         p_value = result[1]
+        
+        # Validate results
+        if np.isnan(adf_statistic) or np.isnan(p_value):
+            return {
+                'adf_statistic': np.nan,
+                'p_value': 1.0,
+                'is_stationary': False
+            }
+        
         is_stationary = p_value < 0.01  # Strong stationarity signal
         
         return {
-            'adf_statistic': adf_statistic,
-            'p_value': p_value,
-            'is_stationary': is_stationary
+            'adf_statistic': float(adf_statistic),
+            'p_value': float(p_value),
+            'is_stationary': bool(is_stationary)
         }
     except Exception as e:
         logger.debug(f"Error in ADF test: {e}")
@@ -109,9 +163,14 @@ def _test_basket_mean_reversion(args):
     
     try:
         # Reconstruct test_data DataFrame
+        index_values = test_data_dict['index']
+        tz = test_data_dict.get('tz')
+        index = pd.DatetimeIndex(index_values)
+        if tz is not None and index.tz is None:
+            index = index.tz_localize(tz)
         test_data = pd.DataFrame(
             test_data_dict['data'],
-            index=pd.DatetimeIndex(test_data_dict['index']),
+            index=index,
             columns=test_data_dict['columns']
         )
         
@@ -124,12 +183,36 @@ def _test_basket_mean_reversion(args):
         
         basket_prices = test_data[basket_cols].values
         
+        # Validate prices
+        if np.any(basket_prices <= 0):
+            logger.debug(f"Invalid prices (non-positive) for basket {basket}")
+            return None
+        
+        if np.any(np.isnan(basket_prices)) or np.any(np.isinf(basket_prices)):
+            logger.debug(f"Invalid prices (NaN/Inf) for basket {basket}")
+            return None
+        
         # Convert to log prices
         log_prices = np.log(basket_prices)
         
+        # Validate log prices
+        if np.any(np.isnan(log_prices)) or np.any(np.isinf(log_prices)):
+            logger.debug(f"Invalid log prices (NaN/Inf) for basket {basket}")
+            return None
+        
         # Recompute spread using eigenvector from cointegration test
         eigenvector = np.array(basket_result['eigenvector'])
+        
+        if np.any(np.isnan(eigenvector)) or np.any(np.isinf(eigenvector)):
+            logger.debug(f"Invalid eigenvector (NaN/Inf) for basket {basket}")
+            return None
+        
         spread = log_prices @ eigenvector
+        
+        # Validate spread
+        if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
+            logger.debug(f"Invalid spread (NaN/Inf) for basket {basket}")
+            return None
         
         # Compute half-life
         half_life_periods = _compute_half_life(spread)
@@ -185,15 +268,20 @@ def filter_baskets_mean_reversion(baskets: List[Dict],
     """
     if max_workers is None:
         max_workers = int(0.9 * (os.cpu_count() or 1)) or 1
-    
+
+    if bars_per_day <= 0:
+        raise ValueError("bars_per_day must be positive")
+
     logger.info(f"Testing {len(baskets)} baskets for mean reversion speed "
                f"(using separate test data: {len(test_data)} samples, "
                f"parallelized with {max_workers} workers)...")
     
     # Convert DataFrame to dict for pickling
+    index_values = test_data.index.view('int64')
     test_data_dict = {
         'data': test_data.values,
-        'index': test_data.index.values,
+        'index': index_values,
+        'tz': getattr(test_data.index, 'tz', None),
         'columns': test_data.columns.tolist()
     }
     

@@ -28,6 +28,11 @@ def _test_window_cointegration(args):
         if window_data.shape[0] < window_data.shape[1] * 10:  # Need enough data
             return {'window_id': window_id, 'is_cointegrated': False, 'p_value': 1.0}
         
+        # Validate data quality
+        if np.any(np.isnan(window_data)) or np.any(np.isinf(window_data)):
+            logger.debug(f"Window {window_id} contains NaN/Inf values")
+            return {'window_id': window_id, 'is_cointegrated': False, 'p_value': 1.0}
+        
         result = johansen_test(window_data)
         return {
             'window_id': window_id,
@@ -35,7 +40,7 @@ def _test_window_cointegration(args):
             'p_value': result['p_value'],
             'trace_stat': result['trace_stat']
         }
-    except Exception as e:
+    except (ValueError, Exception) as e:
         logger.debug(f"Error testing window {window_id}: {e}")
         return {'window_id': window_id, 'is_cointegrated': False, 'p_value': 1.0}
 
@@ -53,6 +58,11 @@ def _test_period_cointegration(args):
         if period_data.shape[0] < period_data.shape[1] * 10:  # Need enough data
             return {'period_id': period_id, 'is_cointegrated': False, 'p_value': 1.0}
         
+        # Validate data quality
+        if np.any(np.isnan(period_data)) or np.any(np.isinf(period_data)):
+            logger.debug(f"Period {period_id} contains NaN/Inf values")
+            return {'period_id': period_id, 'is_cointegrated': False, 'p_value': 1.0}
+        
         result = johansen_test(period_data)
         return {
             'period_id': period_id,
@@ -60,7 +70,7 @@ def _test_period_cointegration(args):
             'p_value': result['p_value'],
             'trace_stat': result['trace_stat']
         }
-    except Exception as e:
+    except (ValueError, Exception) as e:
         logger.debug(f"Error testing period {period_id}: {e}")
         return {'period_id': period_id, 'is_cointegrated': False, 'p_value': 1.0}
 
@@ -256,6 +266,11 @@ def _test_basket_sustainability(args):
     try:
         log_prices = basket_result['log_prices']
         
+        # Validate log_prices
+        if np.any(np.isnan(log_prices)) or np.any(np.isinf(log_prices)):
+            logger.debug(f"Basket {basket_result.get('basket', 'unknown')} log_prices contains NaN/Inf")
+            return None
+        
         # Test rolling windows (sequential within basket worker to avoid nested ProcessPoolExecutor)
         rolling_result = None
         if use_rolling:
@@ -389,5 +404,4 @@ def filter_baskets_sustainability(baskets: List[Dict],
                f"(threshold: {persistence_threshold:.0%})")
     
     return sustainable_baskets
-
 
