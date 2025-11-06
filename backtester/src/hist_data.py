@@ -174,7 +174,12 @@ class HistoricalDataCollector:
             'trades_futures':       f"perpetual_{key}_trades_*.parquet",
         }
         pattern = patterns[kind]
-        return sorted(self.data_dir.glob(pattern))
+        files = sorted(self.data_dir.glob(pattern))
+        # Also check for files with _USDT suffix if base symbol doesn't match
+        if not files and not key.endswith('_USDT'):
+            pattern_usdt = pattern.replace(f"perpetual_{key}_", f"perpetual_{key}_USDT_")
+            files = sorted(self.data_dir.glob(pattern_usdt))
+        return files
 
 
 
@@ -339,12 +344,14 @@ class HistoricalDataCollector:
         Used for permutations as we shuffle teh data insdie of the class and using load_from_cache() leads to same data being used for algo
         """
         try:
+            # Normalize symbol to base format (strip -USDT, -PERP suffixes) to match how data is stored
+            base_symbol = symbol.replace('-USDT', '').replace('-PERP', '')
             if kind == "ohlcv_spot":
-                df = self.spot_ohlcv_data.get(symbol)
+                df = self.spot_ohlcv_data.get(base_symbol)
             elif kind == "mark_ohlcv_futures":
-                df = self.perpetual_mark_ohlcv_data.get(symbol)
+                df = self.perpetual_mark_ohlcv_data.get(base_symbol)
             elif kind == "index_ohlcv_futures":
-                df = self.perpetual_index_ohlcv_data.get(symbol)
+                df = self.perpetual_index_ohlcv_data.get(base_symbol)
             else:
                 raise ValueError(f"Invalid kind: {kind}")
             

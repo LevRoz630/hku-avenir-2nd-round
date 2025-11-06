@@ -216,7 +216,8 @@ class Backtester:
             symbols = strategy.symbols
             # Ensure historical data exists for requested symbols; download if missing
             data_path = Path(self.historical_data_dir)
-            base_symbols = [s.replace('-PERP', '') for s in symbols]
+            # Extract base symbols by removing both -USDT and -PERP suffixes
+            base_symbols = [s.replace('-PERP', '').replace('-USDT', '') for s in symbols]
             data_path.mkdir(parents=True, exist_ok=True)
 
             if time_step is None:
@@ -384,7 +385,8 @@ class Backtester:
 
         data_path = Path(self.historical_data_dir)
         symbols = strategy.symbols
-        base_symbols = [s.replace('-PERP', '') for s in symbols]
+        # Extract base symbols by removing both -USDT and -PERP suffixes
+        base_symbols = [s.replace('-PERP', '').replace('-USDT', '') for s in symbols]
         data_path.mkdir(parents=True, exist_ok=True)
         if time_step is None:
             raise ValueError("Time step is required")

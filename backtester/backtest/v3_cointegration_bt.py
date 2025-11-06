@@ -58,18 +58,19 @@ def main() -> None:
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
     # Run over the last ~90 days by default
-    end_date = datetime.now(timezone.utc) - timedelta(days=1)
-    start_date = end_date - timedelta(days=90)
+    end_date = datetime.now(timezone.utc) - timedelta(days=3)
+    start_date = end_date - timedelta(days=30)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)
-
-    results = backtester.run_backtest(
+    print("Running permutation backtest with 50 permutations...")
+    results = backtester.run_permutation_backtest(
         strategy=strategy,
         position_manager=position_manager,
-        start_date=start_date,
+        start_date=start_date,    
         end_date=end_date,
-        time_step=timedelta(days=1),
-        market_type="futures",
+        time_step=timedelta(minutes=15),
+        market_type="futures",   
+        permutations=50,
     )
 
     backtester.print_results(results)

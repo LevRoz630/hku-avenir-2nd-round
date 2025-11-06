@@ -22,7 +22,7 @@ class V1LSPositionManager:
 
     def _red_button(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Red button to close positions due to n% loss.
+        Red button to close positions due to 15% loss.
         """
         try:
             current_positions = self.oms_client.get_position() or []
@@ -31,14 +31,21 @@ class V1LSPositionManager:
                 try:
                     qty = float(position.get('quantity', 0.0))
                     entry_price = float(position.get('entry_price', 0.0))
-                    current_value = float(position.get('value', 0.0))
+                    pnl = float(position.get('pnl', 0.0))
                 except (TypeError, ValueError):
                     continue
 
-                threshold_value = 0.95 * entry_price * qty
-                # checks if we lost more than 5% on a position (short or long)
-                if current_value < threshold_value:
-                    logger.info(f"Closing position {position['symbol']} due to large loss of {position.get('pnl')}")
+                # Calculate entry value (always positive)
+                entry_value = abs(qty) * entry_price
+                if entry_value == 0:
+                    continue
+                
+                # Calculate PnL percentage
+                pnl_pct = pnl / entry_value
+                
+                # Close if we lost more than 15% (works for both LONG and SHORT)
+                if pnl_pct < -0.15:
+                    logger.info(f"Closing position {position['symbol']} due to large loss of {pnl:.2f} ({pnl_pct*100:.2f}%)")
                     orders.append({'symbol': position['symbol'], 'instrument_type': position['instrument_type'], 'side': 'CLOSE'})
             return orders
         except Exception as e:
