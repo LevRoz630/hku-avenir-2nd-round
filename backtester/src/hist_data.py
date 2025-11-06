@@ -42,8 +42,8 @@ from ccxt.pro import binance as binance_pro
 
 import re
 from typing import Optional, Dict, Tuple
-from utils import _is_utc, _get_number_of_periods, _get_timeframe_to_minutes
-from utils import _convert_symbol_to_ccxt, _normalize_symbol_pair
+from src.utils import _is_utc, _get_number_of_periods, _get_timeframe_to_minutes
+from src.utils import _convert_symbol_to_ccxt, _normalize_symbol_pair
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -184,7 +184,7 @@ class HistoricalDataCollector:
 
 
     def load_data_period(self, symbol: str, timeframe: str, data_type: str, 
-                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = True, export: bool = False):
+                        start_date: datetime, end_date: datetime,save_to_class: bool = False, load_from_class: bool = False, export: bool = False):
         """
         Unified wrapper function to load historical data for a specific time period.
         
