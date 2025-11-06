@@ -62,15 +62,14 @@ def main() -> None:
     start_date = end_date - timedelta(days=30)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)
-    print("Running permutation backtest with 50 permutations...")
-    results = backtester.run_permutation_backtest(
+
+    results = backtester.run_backtest(
         strategy=strategy,
         position_manager=position_manager,
-        start_date=start_date,    
+        start_date=start_date,
         end_date=end_date,
         time_step=timedelta(minutes=15),
-        market_type="futures",   
-        permutations=50,
+        market_type="futures",
     )
 
     backtester.print_results(results)
