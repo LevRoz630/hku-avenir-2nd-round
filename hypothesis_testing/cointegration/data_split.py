@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def split_data_chronologically(price_data: pd.DataFrame,
                                cluster_split: Tuple[float, float] = (1.2, 0.8),
                                cointegration_split: Tuple[float, float] = (0.8, 0.2),
-                               half_life_split: Tuple[float, float] = (0.2, 0.0)) -> dict:
+                               test_split: Tuple[float, float] = (0.2, 0.0)) -> dict:
     """
     Split price data chronologically to prevent overfitting.
     
@@ -37,8 +37,8 @@ def split_data_chronologically(price_data: pd.DataFrame,
     cointegration_split : Tuple[float, float]
         Quantile range for cointegration testing (start, end)
         Default: (0.8, 0.2) = middle 60%
-    half_life_split : Tuple[float, float]
-        Quantile range for half-life testing (start, end)
+    test_split : Tuple[float, float]
+        Quantile range for test data (start, end)
         Default: (0.2, 0.0) = oldest 20%
         
     Returns:
@@ -46,7 +46,7 @@ def split_data_chronologically(price_data: pd.DataFrame,
     dict with keys:
         - 'cluster_data': DataFrame for cluster analysis
         - 'cointegration_data': DataFrame for cointegration testing
-        - 'half_life_data': DataFrame for half-life testing
+        - 'test_data': DataFrame for testing
         - 'splits_info': Dict with split details
     """
     if not isinstance(price_data.index, pd.DatetimeIndex):
@@ -66,22 +66,22 @@ def split_data_chronologically(price_data: pd.DataFrame,
     cointegration_start_idx = int(n_total * (1.0 - cointegration_split[0]))
     cointegration_end_idx = int(n_total * (1.0 - cointegration_split[1]))
     
-    half_life_start_idx = int(n_total * (1.0 - half_life_split[0]))
-    half_life_end_idx = int(n_total * (1.0 - half_life_split[1]))
+    test_start_idx = int(n_total * (1.0 - test_split[0]))
+    test_end_idx = int(n_total * (1.0 - test_split[1]))
     
     # Extract splits (most recent first, so we slice from start)
     cluster_data = price_data_sorted.iloc[cluster_start_idx:cluster_end_idx].sort_index(ascending=True)
     cointegration_data = price_data_sorted.iloc[cointegration_start_idx:cointegration_end_idx].sort_index(ascending=True)
-    half_life_data = price_data_sorted.iloc[half_life_start_idx:half_life_end_idx].sort_index(ascending=True)
+    test_data = price_data_sorted.iloc[test_start_idx:test_end_idx].sort_index(ascending=True)
     
     splits_info = {
         'total_samples': n_total,
         'cluster_samples': len(cluster_data),
         'cointegration_samples': len(cointegration_data),
-        'half_life_samples': len(half_life_data),
+        'test_samples': len(test_data),
         'cluster_date_range': (cluster_data.index.min(), cluster_data.index.max()),
         'cointegration_date_range': (cointegration_data.index.min(), cointegration_data.index.max()),
-        'half_life_date_range': (half_life_data.index.min(), half_life_data.index.max()),
+        'test_date_range': (test_data.index.min(), test_data.index.max()),
     }
     
     logger.info(f"Split data chronologically:")
@@ -89,13 +89,13 @@ def split_data_chronologically(price_data: pd.DataFrame,
                f"from {cluster_data.index.min()} to {cluster_data.index.max()}")
     logger.info(f"  Cointegration: {len(cointegration_data)} samples ({cointegration_split[0]:.0%}-{cointegration_split[1]:.0%}) "
                f"from {cointegration_data.index.min()} to {cointegration_data.index.max()}")
-    logger.info(f"  Half-life: {len(half_life_data)} samples ({half_life_split[0]:.0%}-{half_life_split[1]:.0%}) "
-               f"from {half_life_data.index.min()} to {half_life_data.index.max()}")
+    logger.info(f"  Test: {len(test_data)} samples ({test_split[0]:.0%}-{test_split[1]:.0%}) "
+               f"from {test_data.index.min()} to {test_data.index.max()}")
     
     return {
         'cluster_data': cluster_data,
         'cointegration_data': cointegration_data,
-        'half_life_data': half_life_data,
+        'test_data': test_data,
         'splits_info': splits_info
     }
 
