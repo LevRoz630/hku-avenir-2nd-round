@@ -55,7 +55,6 @@ class V3CointegrationStrategy:
         stop_multiplier: float = 3.0,
         min_history_buffer_days: int = 2,
     ) -> None:
-        self.baskets = baskets  # Store original for serialization
         self.basket_configs: List[Dict] = []
         self.basket_states: List[BasketState] = []
 

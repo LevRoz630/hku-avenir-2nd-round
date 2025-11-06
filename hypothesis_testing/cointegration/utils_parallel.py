@@ -8,8 +8,6 @@ import pandas as pd
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# from .persistence import test_persistence_rolling  # Module doesn't exist
-# from .spread_validator import compute_max_zscore  # Module doesn't exist
 from .johansen_test import johansen_test
 from .basket_generator import compute_spread
 from .deduplicate_baskets import filter_overlapping_baskets

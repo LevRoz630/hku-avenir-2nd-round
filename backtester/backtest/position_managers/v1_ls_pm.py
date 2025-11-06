@@ -1,11 +1,7 @@
-import os 
-from re import L
 from typing import List, Dict, Any
 import logging
-from datetime import timedelta, timezone, datetime
 from hist_data import HistoricalDataCollector
 from oms_simulation import OMSClient
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +79,6 @@ class V1LSPositionManager:
                 order['value'] = 0.0
             sized.append(order)
         return sized
-    
-    def _access_feasibility(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Check if the orders are feasible.
-        """
-        for order in orders:
-            if order.get('value') > self.oms_client.balance['USDT']:
-                return False
-        return True
     
     def filter_orders(self, orders: List[Dict[str, Any]], oms_client: OMSClient, data_manager: HistoricalDataCollector) -> List[Dict[str, Any]]:
 

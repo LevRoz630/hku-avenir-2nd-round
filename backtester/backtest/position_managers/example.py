@@ -1,8 +1,6 @@
-import os 
-from re import L
 from typing import List, Dict, Any
 import logging
-from datetime import timedelta, timezone, datetime
+from datetime import timedelta
 from hist_data import HistoricalDataCollector
 import numpy as np
 

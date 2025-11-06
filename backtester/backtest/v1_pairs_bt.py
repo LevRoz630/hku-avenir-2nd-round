@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from position_managers.example import PositionManager
 from backtester import Backtester
 from strategies.v1_pairs import PairTradingStrategy, set_pairs_config
-# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,6 @@ def main():
         time_step=timedelta(days = 1),
         market_type="futures",
     )
-    # backtester.print_results(results)
-    # backtester.save_results(results, "v1_pairs_bt")
     backtester.plot_portfolio_value()
     backtester.plot_drawdown()
     backtester.plot_returns()

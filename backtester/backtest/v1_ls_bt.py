@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from position_managers.v1_ls_pm import V1LSPositionManager
 from backtester import Backtester
 from strategies.v1_ls import BTCAltShortStrategy
-# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config4
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 

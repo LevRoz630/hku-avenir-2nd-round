@@ -1,6 +1,0 @@
-
-test
-d063463afd1424280335cf74a1319dff56aa4dcd
-
-prod
-bcfcfc6573a7e46e4d432ad809bc93bc5985ab10

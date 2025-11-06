@@ -667,8 +667,6 @@ class Backtester:
         for entry in self.position_exposures_history:
             row = [entry['exposures'].get(sym, 0.0) for sym in all_symbols]
             data.append(row)
-        import numpy as np
-        import plotly.colors as pc
         z = np.array(data, dtype=float)
         fig = go.Figure(data=go.Heatmap(
             z=z.T,

@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parents[2] / "src"))
 from position_manager import PositionManager
 from backtester import Backtester
 from v1_hold import HoldStrategy
-# from strategies.v1_pairs_debug import PairTradingStrategy, set_pairs_config
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -48,22 +48,9 @@ def main():
         market_type="futures",
     )
     
-    backtester.plot_positions(results)
+    backtester.plot_positions()
 
     backtester.save_results(results, "hold_strategy")
-
-
-    # results = backtester.run_permutation_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    #     permutations=10,
-    # )
-    # print("p_value:", results.get("p_value"))
-    # print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

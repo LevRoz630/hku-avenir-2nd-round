@@ -9,8 +9,11 @@ from pathlib import Path
 
 # Ensure local strategy modules and engine src are importable
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.append(str(SCRIPT_DIR))
-sys.path.append(str(SCRIPT_DIR.parent / "src"))
+BACKTEST_ROOT = SCRIPT_DIR
+REPO_ROOT = SCRIPT_DIR.parents[2]
+
+sys.path.append(str(BACKTEST_ROOT))
+sys.path.append(str(REPO_ROOT / "backtester" / "src"))
 
 from backtester import Backtester  # type: ignore  # noqa: E402
 from position_managers.v1_ls_pm import V1LSPositionManager  # type: ignore  # noqa: E402
@@ -26,11 +29,11 @@ logger = logging.getLogger(__name__)
 
 def _resolve_default_paths() -> tuple[Path, Path, Path]:
     """Return paths for JSON configs and historical data directory."""
-    repo_root = SCRIPT_DIR.parent.parent
-    hypothesis_dir = repo_root / "hypothesis_testing" / "cointegration"
+
+    hypothesis_dir = REPO_ROOT / "hypothesis_testing" / "cointegration"
     validated_path = hypothesis_dir / "validated_baskets.json"
     optimization_path = hypothesis_dir / "zscore_optimization.json"
-    hist_dir = repo_root / "hku-data" / "test_data"
+    hist_dir = REPO_ROOT / "hku-data" / "test_data"
     return validated_path, optimization_path, hist_dir
 
 
@@ -58,8 +61,8 @@ def main() -> None:
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
     # Run over the last ~90 days by default
-    end_date = datetime.now(timezone.utc) - timedelta(days=3)
-    start_date = end_date - timedelta(days=30)
+    end_date = datetime.now(timezone.utc) - timedelta(days=1)
+    start_date = end_date - timedelta(days=90)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)
 
@@ -68,7 +71,7 @@ def main() -> None:
         position_manager=position_manager,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(minutes=15),
+        time_step=timedelta(days=1),
         market_type="futures",
     )
 
