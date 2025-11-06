@@ -16,7 +16,7 @@ sys.path.append(str(BACKTEST_ROOT))
 sys.path.append(str(REPO_ROOT / "backtester" / "src"))
 
 from backtester import Backtester  # type: ignore  # noqa: E402
-from position_managers.v1_ls_pm import V1LSPositionManager  # type: ignore  # noqa: E402
+from position_managers.v3_pairs_pm import PositionManager  # type: ignore  # noqa: E402
 from strategies.cointegration_loader import (  # type: ignore  # noqa: E402
     load_cointegration_basket_configs,
 )
@@ -57,7 +57,11 @@ def main() -> None:
         timeframe="15m",
     )
 
-    position_manager = V1LSPositionManager()
+    position_manager = PositionManager(
+        portfolio_alloc_frac=0.8,
+        risk_method='min_volatility',
+        max_total_allocation=2000.0,
+    )
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
     # Run over the last ~90 days by default

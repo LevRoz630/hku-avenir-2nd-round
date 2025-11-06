@@ -4,6 +4,7 @@ from datetime import timedelta
 from src.hist_data import HistoricalDataCollector
 from src.oms_simulation import OMSClient
 import pandas as pd
+import numpy as np
 from pypfopt import risk_models, expected_returns, EfficientFrontier
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ class PositionManager:
     3. Allocates capital to pairs based on risk parity/min vol/max sharpe
     4. Sizes each pair's legs using beta to ensure net beta neutrality
     5. Rebalances existing positions to optimal allocations
+    6. Caps total allocation at $2000 maximum
     """
     
     def __init__(self, 
@@ -24,14 +26,16 @@ class PositionManager:
                  risk_method: str = 'min_volatility',
                  min_lookback_days: int = 90,
                  rebalance_threshold: float = 0.05,
-                 pairs_config: Optional[List[Dict[str, Any]]] = None):
+                 pairs_config: Optional[List[Dict[str, Any]]] = None,
+                 max_total_allocation: float = 2000.0):
         """
         Args:
-            portfolio_alloc_frac: Maximum fraction of balance to allocate to all pairs (default 0.8 = 80%)
+            portfolio_alloc_frac: Maximum fraction of portfolio to allocate to all pairs (default 0.8 = 80%)
             risk_method: 'min_volatility' or 'max_sharpe'
             min_lookback_days: Minimum days of spread returns needed for risk calculation
             rebalance_threshold: Minimum percentage drift before rebalancing (default 0.05 = 5%)
             pairs_config: Optional list of pair configs to build registry. If None, inferred from orders.
+            max_total_allocation: Maximum total capital to allocate across all pairs (default $2000)
         """
         self.oms_client = None
         self.data_manager = None
@@ -39,6 +43,7 @@ class PositionManager:
         self.risk_method = risk_method
         self.min_lookback_days = min_lookback_days
         self.rebalance_threshold = rebalance_threshold
+        self.max_total_allocation = max_total_allocation
         self.pair_spread_history = {}  # Track spread returns for each pair
         
         # Pair registry: {pair_id: {'a_symbol': str, 'b_symbol': str, 'a_base': str, 'b_base': str}}
@@ -122,7 +127,7 @@ class PositionManager:
             total_portfolio_value = oms_client.update_portfolio_value()
             logger.info(f"Total Portfolio Value: ${total_portfolio_value:,.2f}")
             
-            # 8. Calculate optimal allocations for ALL pairs
+            # 8. Calculate optimal allocations for ALL pairs (capped at max_total_allocation)
             optimal_allocations = self._size_pairs(all_pairs_dict, total_portfolio_value)
             
             if not optimal_allocations:
@@ -275,79 +280,131 @@ class PositionManager:
     
     def _compute_spread_returns(self, pairs_dict: Dict[str, List[Dict[str, Any]]]) -> pd.DataFrame:
         """
-        Compute historical spread returns for each pair.
+        Compute historical spread returns for each pair/basket.
         Returns DataFrame with columns = pair_ids, rows = dates
+        
+        Supports both pairs (2 legs) and baskets (multiple legs).
+        For baskets, uses eigenvector weights from ratio field to compute spread.
         """
         spread_returns_dict = {}
         
         for pair_id, orders in pairs_dict.items():
-            # Extract beta from ratio field and identify symbols
             # Filter out CLOSE orders
             open_orders = [o for o in orders if o.get('side') != 'CLOSE' and o.get('ratio') is not None]
             
             if len(open_orders) < 2:
-                logger.warning(f"Pair {pair_id} has insufficient open orders")
+                logger.warning(f"Pair/Basket {pair_id} has insufficient open orders")
                 continue
             
-            # Extract beta from ratio field
-            # For short spread: A has ratio=1, B has ratio=beta → beta = max(ratios)
-            # For long spread: A has ratio=beta, B has ratio=1 → beta = max(ratios)
-            ratios = [o.get('ratio') for o in open_orders if o.get('ratio') is not None]
-            if not ratios:
-                # If no open orders yet, we can still compute spread returns using pair_id
-                # Try to get beta from any order or use default
-                beta = 1.0  # Default beta if we can't determine
-            else:
-                beta = max(ratios)  # The larger ratio is always beta
+            # Extract symbols and ratios from orders
+            symbol_ratios = {}
+            for order in open_orders:
+                symbol = order.get('symbol')
+                ratio = order.get('ratio')
+                if symbol and ratio:
+                    symbol_ratios[symbol] = ratio
             
-            # Get symbols directly from pair_id (format: "APT-USDT_NEAR-USDT")
-            pair_parts = pair_id.split('_')
-            if len(pair_parts) != 2:
-                logger.warning(f"Pair {pair_id} has invalid format, expected 'BASE1_BASE2'")
+            if not symbol_ratios:
+                logger.warning(f"Pair/Basket {pair_id} has no valid symbol/ratio data")
                 continue
             
-            # Extract base symbols from pair_id
-            a_base = pair_parts[0].replace('-USDT', '')
-            b_base = pair_parts[1].replace('-USDT', '')
+            # Extract base symbols (remove -PERP suffix)
+            symbols = list(symbol_ratios.keys())
+            base_symbols = [s.replace('-PERP', '') for s in symbols]
             
-            # Load historical data for both symbols
+            # Check if this is a basket (multiple legs) or pair (2 legs)
+            is_basket = len(base_symbols) > 2
             
-            # Get historical closes
+            # Load historical data for all symbols
             lookback_start = self.oms_client.current_time - timedelta(days=self.min_lookback_days)
             
-            a_data = self.data_manager.load_data_period(
-                a_base, '15m', 'index_ohlcv_futures',
-                lookback_start, self.oms_client.current_time
-            )
-            b_data = self.data_manager.load_data_period(
-                b_base, '15m', 'index_ohlcv_futures',
-                lookback_start, self.oms_client.current_time
-            )
+            price_data = {}
+            for base_sym in base_symbols:
+                data = self.data_manager.load_data_period(
+                    base_sym, '15m', 'index_ohlcv_futures',
+                    lookback_start, self.oms_client.current_time
+                )
+                
+                if data is None or len(data) == 0:
+                    logger.warning(f"Insufficient data for {base_sym} in {pair_id}")
+                    break
+                
+                data = data.set_index('timestamp') if 'timestamp' in data.columns else data
+                # Use 15m data directly (no resampling) to match strategy timeframe
+                price_series = data['close']
+                price_data[base_sym] = price_series
             
-            if a_data is None or b_data is None or len(a_data) == 0 or len(b_data) == 0:
-                logger.warning(f"Insufficient data for pair {pair_id}")
+            if len(price_data) != len(base_symbols):
+                logger.warning(f"Insufficient data for pair/basket {pair_id}")
                 continue
             
-            # Align on timestamp and compute spread
-            a_data = a_data.set_index('timestamp') if 'timestamp' in a_data.columns else a_data
-            b_data = b_data.set_index('timestamp') if 'timestamp' in b_data.columns else b_data
+            # Align all price series (15m bars)
+            aligned_df = pd.DataFrame(price_data).dropna()
             
-            # Resample to daily
-            a_daily = a_data['close'].resample('1D').last().dropna()
-            b_daily = b_data['close'].resample('1D').last().dropna()
+            # Convert min_lookback_days to bars (assuming 15m data: 96 bars/day)
+            bars_per_day = 96
+            min_lookback_bars = self.min_lookback_days * bars_per_day
             
-            # Align
-            aligned = pd.concat([a_daily.rename('a'), b_daily.rename('b')], axis=1).dropna()
-            
-            if len(aligned) < self.min_lookback_days:
-                logger.warning(f"Insufficient aligned data for pair {pair_id}")
+            if len(aligned_df) < min_lookback_bars:
+                logger.warning(f"Insufficient aligned data for pair/basket {pair_id}: {len(aligned_df)} bars < {min_lookback_bars} required")
                 continue
             
-            # Compute spread: spread = Price_A - beta * Price_B
-            aligned['spread'] = aligned['a'] - beta * aligned['b']
+            # Compute spread
+            if is_basket:
+                # Multi-leg basket: reconstruct eigenvector weights from orders
+                # Use eigenvector_sign if available, otherwise infer from LONG/SHORT
+                weight_vec = np.zeros(len(base_symbols))
+                
+                for order in open_orders:
+                    symbol = order.get('symbol')
+                    base = symbol.replace('-PERP', '')
+                    if base in base_symbols:
+                        idx = base_symbols.index(base)
+                        ratio = order.get('ratio', 0)
+                        
+                        # Use eigenvector_sign if available (more accurate)
+                        eigenvector_sign = order.get('eigenvector_sign')
+                        if eigenvector_sign is not None:
+                            weight_vec[idx] = eigenvector_sign * ratio
+                        else:
+                            # Fallback: infer sign from order side
+                            side = order.get('side')
+                            sign = 1.0 if side == 'LONG' else -1.0
+                            weight_vec[idx] = sign * ratio
+                
+                # Normalize by sum of absolute values (like eigenvector normalization)
+                sum_abs = np.sum(np.abs(weight_vec))
+                if sum_abs > 0:
+                    weight_vec = weight_vec / sum_abs
+                else:
+                    logger.warning(f"Invalid weight vector for basket {pair_id}")
+                    continue
+                
+                # Compute spread: spread = log_prices @ weight_vec (matches strategy)
+                log_prices = np.log(aligned_df[base_symbols].values)
+                spread = log_prices @ weight_vec
+            else:
+                # Pair: use simple spread calculation (A - beta * B)
+                # Extract beta from ratios
+                ratios_list = [symbol_ratios[s] for s in symbols]
+                beta = max(ratios_list) if ratios_list else 1.0
+                
+                # Determine which symbol gets beta
+                a_base = base_symbols[0]
+                b_base = base_symbols[1]
+                
+                # Compute spread: spread = Price_A - beta * Price_B
+                spread = aligned_df[a_base].values - beta * aligned_df[b_base].values
             
-            # Compute spread returns (percentage change)
-            spread_returns_series = aligned['spread'].pct_change().dropna()
+            # Compute spread returns
+            if is_basket:
+                # For baskets, spread is in log space, so use diff (change in log spread)
+                spread_series = pd.Series(spread, index=aligned_df.index)
+                spread_returns_series = spread_series.diff().dropna()
+            else:
+                # For pairs, use percentage change
+                spread_series = pd.Series(spread, index=aligned_df.index)
+                spread_returns_series = spread_series.pct_change().dropna()
             
             # Store for later use
             self.pair_spread_history[pair_id] = spread_returns_series
@@ -358,7 +415,7 @@ class PositionManager:
         if not spread_returns_dict:
             return pd.DataFrame()
         
-        # Align all pairs on common dates
+        # Align all pairs/baskets on common dates
         spread_returns_df = pd.DataFrame(spread_returns_dict)
         spread_returns_df = spread_returns_df.dropna()
         
@@ -372,6 +429,7 @@ class PositionManager:
         
         Uses risk parity or other optimization methods to allocate capital
         such that each pair contributes equal risk (or optimizes for min vol/max sharpe).
+        Total allocation is capped at max_total_allocation.
         
         Args:
             pairs_dict: All pairs (existing + new orders)
@@ -409,8 +467,15 @@ class PositionManager:
             if total_weight > 0:
                 weights = {k: v / total_weight for k, v in weights.items()}
             
-            # Allocate capital based on total portfolio value
-            total_capital = total_portfolio_value * self.portfolio_alloc_frac
+            # Calculate desired capital based on portfolio value and allocation fraction
+            desired_capital = total_portfolio_value * self.portfolio_alloc_frac
+            
+            # Cap at max_total_allocation
+            total_capital = min(desired_capital, self.max_total_allocation)
+            
+            if desired_capital > self.max_total_allocation:
+                logger.info(f"Capping allocation: desired=${desired_capital:,.2f}, capped=${total_capital:,.2f}")
+            
             allocations = {pair_id: total_capital * weight 
                           for pair_id, weight in weights.items()}
             
@@ -426,7 +491,10 @@ class PositionManager:
         if n_pairs == 0:
             return {}
         
-        total_capital = total_portfolio_value * self.portfolio_alloc_frac
+        # Calculate desired capital and cap at max_total_allocation
+        desired_capital = total_portfolio_value * self.portfolio_alloc_frac
+        total_capital = min(desired_capital, self.max_total_allocation)
+        
         per_pair_capital = total_capital / n_pairs
         
         allocations = {pair_id: per_pair_capital for pair_id in pairs_dict.keys()}

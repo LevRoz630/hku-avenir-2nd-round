@@ -181,19 +181,26 @@ class V3CointegrationStrategy:
         assert side in {"long_spread", "short_spread"}
 
         orders: List[Dict[str, object]] = []
-        sum_abs = basket_cfg["sum_abs_weights"]
-        max_alloc_frac = float(basket_cfg.get("max_alloc_frac", 1.0))
+        basket_id = basket_cfg.get("name", f"basket_{id(basket_cfg)}")
+        
+        # Convert eigenvector weights to ratios (normalized absolute values)
+        eigenvector = basket_cfg["eigenvector"]
+        abs_weights = np.abs(eigenvector)
+        sum_abs = np.sum(abs_weights)
+        
+        if sum_abs <= 0:
+            return orders
 
         for symbol_perp, weight in zip(
-            basket_cfg.get("symbols_perp", []), basket_cfg["eigenvector"]
+            basket_cfg.get("symbols_perp", []), eigenvector
         ):
             if weight == 0:
                 continue
 
-            weight_abs = abs(weight)
-            alloc_frac = max_alloc_frac * (weight_abs / sum_abs)
-
-            if alloc_frac <= 0:
+            # Use absolute normalized weight as ratio for v3_pairs_pm
+            ratio = abs(weight) / sum_abs if sum_abs > 0 else 0
+            
+            if ratio <= 0:
                 continue
 
             if side == "long_spread":
@@ -206,7 +213,9 @@ class V3CointegrationStrategy:
                     "symbol": symbol_perp,
                     "instrument_type": "future",
                     "side": order_side,
-                    "alloc_frac": alloc_frac,
+                    "pair_id": basket_id,
+                    "ratio": float(ratio),
+                    "eigenvector_sign": float(np.sign(weight)),  # Store original sign for spread calculation
                 }
             )
 
@@ -214,12 +223,14 @@ class V3CointegrationStrategy:
 
     def _close_basket_orders(self, basket_cfg: Dict) -> List[Dict[str, object]]:
         orders: List[Dict[str, object]] = []
+        basket_id = basket_cfg.get("name", f"basket_{id(basket_cfg)}")
         for symbol_perp in basket_cfg.get("symbols_perp", []):
             orders.append(
                 {
                     "symbol": symbol_perp,
                     "instrument_type": "future",
                     "side": "CLOSE",
+                    "pair_id": basket_id,
                 }
             )
         return orders
