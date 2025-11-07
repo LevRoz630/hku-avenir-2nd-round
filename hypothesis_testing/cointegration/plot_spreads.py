@@ -59,8 +59,6 @@ def plot_spread_on_test_data(basket_data, test_data, basket_idx):
     
     # Get stats from JSON
     half_life_days = basket_data.get('half_life_days', None)
-    adf_p_value = basket_data.get('adf_p_value', None)
-    is_stationary = basket_data.get('is_stationary', False)
     
     # Create figure with two subplots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
@@ -112,9 +110,7 @@ def plot_spread_on_test_data(basket_data, test_data, basket_idx):
             stats_text = "Half-life: inf"
         else:
             stats_text = f"Half-life: {half_life_days:.1f} days"
-    if adf_p_value is not None:
-        stats_text += f" | ADF p-value: {adf_p_value:.4f}"
-    stats_text += f" | Stationary: {is_stationary}"
+    stats_text += " | Hurst-based half-life"
     
     if stats_text:
         fig.suptitle(stats_text, fontsize=11, y=0.995)

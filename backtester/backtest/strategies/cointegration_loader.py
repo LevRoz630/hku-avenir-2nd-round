@@ -118,7 +118,7 @@ def load_cointegration_basket_configs(
                 "johansen_p_value": float(
                     basket_record.get("johansen_p_value", float("nan"))
                 ),
-                "adf_p_value": float(basket_record.get("adf_p_value", float("nan"))),
+                "hurst_half_life_days": float(basket_record.get("hurst_half_life_days", float("inf"))),
                 "sustainability_rolling": float(
                     basket_record.get("sustainability_rolling", float("nan"))
                 ),
