@@ -90,6 +90,14 @@ class HistoricalDataCollector:
     >>> print(collector.data_dir)
     PosixPath('./my_data')
     """
+
+    _FUTURES_DATA_TYPES = {
+        'mark_ohlcv_futures',
+        'index_ohlcv_futures',
+        'funding_rates',
+        'open_interest',
+        'trades_futures',
+    }
     
     def __init__(self, data_dir="../hku-data/test_data"):
         """
@@ -160,25 +168,50 @@ class HistoricalDataCollector:
             self.futures_exchange_pro = None
             self.futures_exchange = None
             raise ValueError(f"CCXT exchange initialization failed: {e}")
+
+    def _normalize_symbol_input(self, symbol: str) -> str:
+        """Canonicalize symbol formatting for downstream use."""
+        if not symbol:
+            raise ValueError("Symbol is required")
+        normalized = str(symbol).strip().upper()
+        return normalized.replace('/', '-').replace('_', '-')
+
+    def _storage_key(self, symbol: str, data_type: str) -> str:
+        """Return the dictionary/cache key for a given symbol/data_type pair."""
+        normalized = self._normalize_symbol_input(symbol)
+        if data_type == 'ohlcv_spot':
+            normalized = normalized.replace('-PERP', '')
+            if '-USDT' not in normalized:
+                normalized = f"{normalized}-USDT"
+            return normalized
+
+        normalized = normalized.replace('-PERP', '').replace('-USDT', '')
+        return normalized
+
+    def _cache_token(self, symbol: str, data_type: str) -> str:
+        """Token used inside cache filenames (underscored storage key)."""
+        return self._storage_key(symbol, data_type).replace('-', '_')
     # ------------------------
     # Cache utilities
     # ------------------------
     def _cache_glob(self, kind: str, symbol: str, timeframe: str | None) -> list:
-        key = symbol.replace('-', '_')
+        cache_symbol = self._cache_token(symbol, kind)
         patterns = {
-            'ohlcv_spot':           f"spot_{key}_ohlcv_{timeframe}_*.parquet",
-            'mark_ohlcv_futures':   f"perpetual_{key}_mark_{timeframe}_*.parquet",
-            'index_ohlcv_futures':  f"perpetual_{key}_index_{timeframe}_*.parquet",
-            'funding_rates':        f"perpetual_{key}_funding_rates_*.parquet",
-            'open_interest':        f"perpetual_{key}_open_interest_{timeframe}_*.parquet",
-            'trades_futures':       f"perpetual_{key}_trades_*.parquet",
+            'ohlcv_spot':           f"spot_{cache_symbol}_ohlcv_{timeframe}_*.parquet",
+            'mark_ohlcv_futures':   f"perpetual_{cache_symbol}_mark_{timeframe}_*.parquet",
+            'index_ohlcv_futures':  f"perpetual_{cache_symbol}_index_{timeframe}_*.parquet",
+            'funding_rates':        f"perpetual_{cache_symbol}_funding_rates_*.parquet",
+            'open_interest':        f"perpetual_{cache_symbol}_open_interest_{timeframe}_*.parquet",
+            'trades_futures':       f"perpetual_{cache_symbol}_trades_*.parquet",
         }
         pattern = patterns[kind]
         files = sorted(self.data_dir.glob(pattern))
-        # Also check for files with _USDT suffix if base symbol doesn't match
-        if not files and not key.endswith('_USDT'):
-            pattern_usdt = pattern.replace(f"perpetual_{key}_", f"perpetual_{key}_USDT_")
-            files = sorted(self.data_dir.glob(pattern_usdt))
+
+        if not files:
+            legacy_symbol = f"{cache_symbol}_USDT"
+            legacy_pattern = pattern.replace(cache_symbol, legacy_symbol)
+            files = sorted(self.data_dir.glob(legacy_pattern))
+
         return files
 
 
@@ -274,19 +307,14 @@ class HistoricalDataCollector:
 
         
         
+        storage_symbol = self._storage_key(symbol, data_type)
+        cache_timeframe = timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+
         # Cache-first, then collect
-        kind_map = {
-            'ohlcv_spot': 'ohlcv_spot',
-            'mark_ohlcv_futures': 'mark_ohlcv_futures',
-            'index_ohlcv_futures': 'index_ohlcv_futures',
-            'funding_rates': 'funding_rates',
-            'open_interest': 'open_interest',
-            'trades_futures': 'trades_futures',
-        }
         try:
             if load_from_class:
                 filtered_data = self.load_from_class(
-                    kind_map[data_type], symbol, start_date, end_date
+                    data_type, symbol, start_date, end_date
                 )
                 if filtered_data is None or filtered_data.empty:
                     return None
@@ -294,34 +322,46 @@ class HistoricalDataCollector:
                 filtered_data = filtered_data.copy()
             else:
                 filtered_data = self.load_cached_window(
-                kind_map[data_type], symbol, start_date, end_date,
-                timeframe if data_type in ("ohlcv_spot", "mark_ohlcv_futures", "index_ohlcv_futures", "open_interest") else None
+                    data_type,
+                    symbol,
+                    start_date,
+                    end_date,
+                    cache_timeframe
             )
             if filtered_data is None or filtered_data.empty:
+                # During backtest execution, don't fetch from network for narrow time windows
+                time_window_hours = (end_date - start_date).total_seconds() / 3600
+                if time_window_hours < 2:  # Less than 2 hours = likely backtest price request
+                    logger.warning(f"Cache miss during backtest: {data_type} {symbol} {timeframe} ({time_window_hours:.1f}h window)")
+                    logger.warning("Data should be preloaded. Check initialization.")
+                    return None
+
                 logger.info(
                     f"Cache miss: {data_type} {symbol} {timeframe}, fetching from network and saving to cache"
                 )
 
                 if data_type == "mark_ohlcv_futures":
-                    filtered_data = self.collect_perpetual_mark_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.collect_perpetual_mark_ohlcv(storage_symbol, timeframe, start_date, export=export)
                 elif data_type == "index_ohlcv_futures":
-                    filtered_data = self.collect_perpetual_index_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.collect_perpetual_index_ohlcv(storage_symbol, timeframe, start_date, export=export)
                 elif data_type == "ohlcv_spot":
-                    filtered_data = self.collect_spot_ohlcv(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.collect_spot_ohlcv(storage_symbol, timeframe, start_date, export=export)
                 elif data_type == "funding_rates":
-                    filtered_data = self.collect_funding_rates(symbol, start_date, export=export)
+                    filtered_data = self.collect_funding_rates(storage_symbol, start_date, export=export)
                 elif data_type == "open_interest":
-                    filtered_data = self.collect_open_interest(symbol, timeframe, start_date, export=export)
+                    filtered_data = self.collect_open_interest(storage_symbol, timeframe, start_date, export=export)
                 elif data_type == "trades_futures":
-                    filtered_data = self.collect_perpetual_trades(symbol, start_date, export=export)
+                    filtered_data = self.collect_perpetual_trades(storage_symbol, start_date, export=export)
                 else:
                     raise ValueError(f"Invalid data type: {data_type}")
         
             if save_to_class:
-                self.kind_map[data_type][symbol] = filtered_data
+                self.kind_map[data_type][storage_symbol] = filtered_data
                 
         except Exception as e:
             logger.error(f"Error loading data: {e} for {symbol}")
+            return None
+        if filtered_data is None or filtered_data.empty:
             return None
         # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
         filtered_data = filtered_data.copy()
@@ -341,27 +381,19 @@ class HistoricalDataCollector:
         
         # Filter data to the requested time period (start_date/end_date already UTC)
         filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
+        filtered_data["symbol"] = storage_symbol
         return filtered_data
 
     def load_from_class(self, kind: str, symbol: str, start_date, end_date):
-        """Load data from class structures
-        Returns a slice of the data between start_date and end_date
-        Used for permutations as we shuffle teh data insdie of the class and using load_from_cache() leads to same data being used for algo
-        """
+        """Load a cached slice from in-memory stores for the requested window."""
         try:
-            # Normalize symbol to base format (strip -USDT, -PERP suffixes) to match how data is stored
-            base_symbol = symbol.replace('-USDT', '').replace('-PERP', '')
-            if kind == "ohlcv_spot":
-                df = self.spot_ohlcv_data.get(base_symbol)
-            elif kind == "mark_ohlcv_futures":
-                df = self.perpetual_mark_ohlcv_data.get(base_symbol)
-            elif kind == "index_ohlcv_futures":
-                df = self.perpetual_index_ohlcv_data.get(base_symbol)
-            else:
+            storage_symbol = self._storage_key(symbol, kind)
+            store = self.kind_map.get(kind)
+            if store is None:
                 raise ValueError(f"Invalid kind: {kind}")
+            df = store.get(storage_symbol)
             
             if df is None:
-                logger.debug(f"No data for {base_symbol} {kind} found in class structure. Available keys: {list(eval(f'self.{kind}_data.keys()')) if hasattr(self, f'{kind}_data') else 'N/A'}")
                 return None
 
 
@@ -392,7 +424,8 @@ class HistoricalDataCollector:
 
     def load_cached_window(self, kind: str, symbol: str, start_date, end_date, timeframe: str | None = None):
         """Return cached parquet data sliced to [start_date, end_date] if available, else None."""
-        files = self._cache_glob(kind, symbol, timeframe)
+        storage_symbol = self._storage_key(symbol, kind)
+        files = self._cache_glob(kind, storage_symbol, timeframe)
         if not files:
             return None
         # Ensure tz-aware UTC timestamps for window bounds
@@ -426,6 +459,7 @@ class HistoricalDataCollector:
                     # Convert to UTC and ensure dtype compatibility
                     converted_ts = df['timestamp'].dt.tz_convert('UTC')
                     df['timestamp'] = converted_ts.astype('datetime64[ns, UTC]')
+                df['symbol'] = storage_symbol
                 ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
                 if ts_max < s or ts_min > e:
                     continue
@@ -511,23 +545,27 @@ class HistoricalDataCollector:
         >>> spot_data = collector.collect_spot_ohlcv("BTC-USDT", "1h", start_time, export=True)
         >>> print(spot_data.head())
         """
+        if start_time is None:
+            raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'ohlcv_spot')
+
         _is_utc(start_time)
         end_time = end_time or datetime.now(timezone.utc)
         _is_utc(end_time)
         max_records_per_request = 1000
         all_ohlcv = []
-        if start_time is None:
-            raise ValueError("Start time is required")
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
 
         
-        filename = f"spot_{symbol.replace('-', '_')}_ohlcv_{timeframe}_{start_str}_{end_str}.parquet"
+        cache_token = self._cache_token(storage_symbol, 'ohlcv_spot')
+        filename = f"spot_{cache_token}_ohlcv_{timeframe}_{start_str}_{end_str}.parquet"
 
-        logger.info(f"Collecting spot OHLCV for {symbol}...")
+        logger.info(f"Collecting spot OHLCV for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "spot")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "spot")
 
         # Collect data using unified collection method
         all_ohlcv = self._loop_data_collection(
@@ -544,17 +582,17 @@ class HistoricalDataCollector:
         if all_ohlcv:
             df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['symbol'] = symbol
+            df['symbol'] = storage_symbol
             df['market_type'] = 'spot'
             df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
             
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
-                logger.info(f"  Saved spot OHLCV for {symbol}: {len(df):,} records to {filename}")
-            self.spot_ohlcv_data[symbol] = df
+                logger.info(f"  Saved spot OHLCV for {storage_symbol}: {len(df):,} records to {filename}")
+            self.spot_ohlcv_data[storage_symbol] = df
             return df
         else:
-            logger.error(f"  No spot OHLCV data collected for {symbol}")
+            logger.error(f"  No spot OHLCV data collected for {storage_symbol}")
             return None
 
     def collect_perpetual_mark_ohlcv(self, symbol: str, timeframe: str = '15m',
@@ -598,6 +636,10 @@ class HistoricalDataCollector:
         >>> print(mark_data.head())
         """
 
+        if start_time is None:
+            raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'mark_ohlcv_futures')
 
         max_records_per_request = 1000
         all_ohlcv = []
@@ -605,17 +647,15 @@ class HistoricalDataCollector:
         end_time = end_time or datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
-        if start_time is None:
-            raise ValueError("Start time is required")
 
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d') if isinstance(end_time, datetime) else str(end_time)
-        filename = f"perpetual_{symbol.replace('-', '_')}_mark_{timeframe}_{start_str}_{end_str}.parquet"
-        logger.info(f"Collecting perpetual mark price OHLCV for {symbol}...")
+        cache_token = self._cache_token(storage_symbol, 'mark_ohlcv_futures')
+        filename = f"perpetual_{cache_token}_mark_{timeframe}_{start_str}_{end_str}.parquet"
+        logger.info(f"Collecting perpetual mark price OHLCV for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "future")
 
         # Collect data using unified collection method with mark price parameter
         all_ohlcv = self._loop_data_collection(
@@ -632,17 +672,17 @@ class HistoricalDataCollector:
         if all_ohlcv:
             df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['symbol'] = symbol
+            df['symbol'] = storage_symbol
             df['market_type'] = 'perpetual'
             df['price_type'] = 'mark'
             df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
             
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
-                logger.info(f"  Saved perpetual mark OHLCV for {symbol}: {len(df):,} records to {filename}")
+                logger.info(f"  Saved perpetual mark OHLCV for {storage_symbol}: {len(df):,} records to {filename}")
             return df
         else:
-            logger.error(f"  No perpetual mark OHLCV data collected for {symbol}")
+            logger.error(f"  No perpetual mark OHLCV data collected for {storage_symbol}")
             return None
 
     def collect_perpetual_index_ohlcv(self, symbol: str, timeframe: str = '15m',
@@ -686,6 +726,10 @@ class HistoricalDataCollector:
         >>> print(index_data.head())
         """
 
+        if start_time is None:
+            raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'index_ohlcv_futures')
 
         max_records_per_request = 1000
         all_ohlcv = []
@@ -693,17 +737,15 @@ class HistoricalDataCollector:
         end_time = end_time or datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
-        if start_time is None:
-            raise ValueError("Start time is required")
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
-        filename = f"perpetual_{symbol.replace('-', '_')}_index_{timeframe}_{start_str}_{end_str}.parquet"
+        cache_token = self._cache_token(storage_symbol, 'index_ohlcv_futures')
+        filename = f"perpetual_{cache_token}_index_{timeframe}_{start_str}_{end_str}.parquet"
 
-        logger.info(f"Collecting perpetual index price OHLCV for {symbol}...")
+        logger.info(f"Collecting perpetual index price OHLCV for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "future")
 
         # Collect data using unified collection method with index price parameter
         all_ohlcv = self._loop_data_collection(
@@ -720,17 +762,17 @@ class HistoricalDataCollector:
         if all_ohlcv:
             df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['symbol'] = symbol
+            df['symbol'] = storage_symbol
             df['market_type'] = 'perpetual'
             df['price_type'] = 'index'
             df = df.sort_values('timestamp').drop_duplicates().reset_index(drop=True)
             
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
-                logger.info(f"  Saved perpetual index OHLCV for {symbol}: {len(df):,} records to {filename}")
+                logger.info(f"  Saved perpetual index OHLCV for {storage_symbol}: {len(df):,} records to {filename}")
             return df
         else:
-            logger.error(f"  No perpetual index OHLCV data collected for {symbol}")
+            logger.error(f"  No perpetual index OHLCV data collected for {storage_symbol}")
             return None
 
     def collect_funding_rates(self, symbol: str, start_time: datetime = None, export: bool = True):
@@ -769,26 +811,24 @@ class HistoricalDataCollector:
         >>> funding_data = collector.collect_funding_rates("BTC-USDT", start_time, export=False)
         >>> print(funding_data.head())
         """
-
-        end_time = datetime.now(timezone.utc)
-        _is_utc(start_time)
-        _is_utc(end_time)
-
-        end_time = datetime.now(timezone.utc)
-        _is_utc(start_time)
-        _is_utc(end_time)
         if start_time is None:
             raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'funding_rates')
+
+        end_time = datetime.now(timezone.utc)
+        _is_utc(start_time)
+        _is_utc(end_time)
 
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
-        filename = f"perpetual_{symbol.replace('-', '_')}_funding_rates_{start_str}_{end_str}.parquet"
+        cache_token = self._cache_token(storage_symbol, 'funding_rates')
+        filename = f"perpetual_{cache_token}_funding_rates_{start_str}_{end_str}.parquet"
 
-        logger.info(f"Collecting funding rates for {symbol}...")
+        logger.info(f"Collecting funding rates for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "future")
         since = int(start_time.timestamp() * 1000)
         
         try:
@@ -808,7 +848,7 @@ class HistoricalDataCollector:
                         'funding_time': rate.get('fundingTime') or info.get('fundingTime'),
                         'mark_price': rate.get('markPrice') or info.get('markPrice'),
                         'index_price': rate.get('indexPrice') or info.get('indexPrice'),
-                        'symbol': symbol,
+                        'symbol': storage_symbol,
                         'market_type': 'perpetual'
                     })
                 
@@ -824,14 +864,14 @@ class HistoricalDataCollector:
                 
                 if export:
                     df.to_parquet(self.data_dir / filename, index=False)
-                    logger.info(f"  Saved funding rates for {symbol}: {len(df):,} records to {filename}")
+                    logger.info(f"  Saved funding rates for {storage_symbol}: {len(df):,} records to {filename}")
                 return df
             else:
-                logger.error(f"  No funding rate data for {symbol}")
+                logger.error(f"  No funding rate data for {storage_symbol}")
                 return None
             
         except Exception as e:
-            logger.error(f"Failed to collect funding rates for {symbol}: {e}")
+            logger.error(f"Failed to collect funding rates for {storage_symbol}: {e}")
             return None
 
     def collect_open_interest(self, symbol: str, timeframe: str = '15m',
@@ -875,6 +915,10 @@ class HistoricalDataCollector:
         >>> print(oi_data.head())
         """
 
+        if start_time is None:
+            raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'open_interest')
 
         max_records_per_request = 1000
         all_open_interest = []
@@ -882,21 +926,16 @@ class HistoricalDataCollector:
         end_time = datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
-        end_time = datetime.now(timezone.utc)
-        _is_utc(start_time)
-        _is_utc(end_time)
-        if start_time is None:
-            raise ValueError("Start time is required")
 
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
-        filename = f"perpetual_{symbol.replace('-', '_')}_open_interest_{timeframe}_{start_str}_{end_str}.parquet"
+        cache_token = self._cache_token(storage_symbol, 'open_interest')
+        filename = f"perpetual_{cache_token}_open_interest_{timeframe}_{start_str}_{end_str}.parquet"
 
-        logger.info(f"Collecting open interest for {symbol}...")
+        logger.info(f"Collecting open interest for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "future")
 
         # Collect data using unified collection method
         all_open_interest = self._loop_data_collection(
@@ -918,7 +957,7 @@ class HistoricalDataCollector:
                     'open_interest': oi.get('openInterestAmount'),
                     'open_interest_value': oi.get('openInterestValue'),
                     'contract_type': oi.get('contractType', 'perpetual'),
-                    'symbol': symbol,
+                    'symbol': storage_symbol,
                     'market_type': 'perpetual'
                 })
             
@@ -928,10 +967,10 @@ class HistoricalDataCollector:
             
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
-                logger.info(f"  Saved open interest for {symbol}: {len(df):,} records to {filename}")
+                logger.info(f"  Saved open interest for {storage_symbol}: {len(df):,} records to {filename}")
             return df
         else:
-            logger.error(f"  No open interest data for {symbol}")
+            logger.error(f"  No open interest data for {storage_symbol}")
             return None
 
     def collect_perpetual_trades(self, symbol: str, start_time: datetime = None, export: bool = True):
@@ -971,26 +1010,25 @@ class HistoricalDataCollector:
         >>> print(trades_data.head())
         """
 
-        end_time = datetime.now(timezone.utc)
-        _is_utc(start_time)
-        _is_utc(end_time)
+        if start_time is None:
+            raise ValueError("Start time is required")
+
+        storage_symbol = self._storage_key(symbol, 'trades_futures')
 
         end_time = datetime.now(timezone.utc)
         _is_utc(start_time)
         _is_utc(end_time)
-        if start_time is None:
-            raise ValueError("Start time is required")
 
         # Generate safe filename
         start_str = start_time.strftime('%Y%m%d_%H%M%S') if isinstance(start_time, datetime) else str(start_time)
         end_str = end_time.strftime('%Y%m%d_%H%M%S') if isinstance(end_time, datetime) else str(end_time)
-        filename = f"perpetual_{symbol.replace('-', '_')}_trades_{start_str}_{end_str}.parquet"
+        cache_token = self._cache_token(storage_symbol, 'trades_futures')
+        filename = f"perpetual_{cache_token}_trades_{start_str}_{end_str}.parquet"
 
 
-        logger.info(f"Collecting perpetual trades for {symbol}...")
+        logger.info(f"Collecting perpetual trades for {storage_symbol}...")
 
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
-        ccxt_symbol = _convert_symbol_to_ccxt(symbol, "future")
+        ccxt_symbol = _convert_symbol_to_ccxt(storage_symbol, "future")
         all_trades = []
         current_start_time = start_time
         
@@ -1003,7 +1041,7 @@ class HistoricalDataCollector:
                     all_trades.extend(trades)
                     logger.info(f"  Perpetual trades batch: {len(trades)} trades")
                     trades_time = trades[-1].get('timestamp')
-                    current_start_time = datetime.fromtimestamp(trades_time/1000)
+                    current_start_time = datetime.fromtimestamp(trades_time / 1000, tz=timezone.utc)
                 else:
                     break
                 
@@ -1024,7 +1062,7 @@ class HistoricalDataCollector:
                     'amount': trade.get('amount'),
                     'cost': trade.get('cost'),
                     'takerOrMaker': trade.get('takerOrMaker'),
-                    'symbol': symbol,
+                    'symbol': storage_symbol,
                     'market_type': 'perpetual'
                 })
             
@@ -1034,11 +1072,11 @@ class HistoricalDataCollector:
             
             if export:
                 df.to_parquet(self.data_dir / filename, index=False)
-                logger.info(f"  Saved perpetual trades for {symbol}: {len(df):,} records to {filename}")
-            self.perpetual_trades_data[symbol] = df
+                logger.info(f"  Saved perpetual trades for {storage_symbol}: {len(df):,} records to {filename}")
+            self.perpetual_trades_data[storage_symbol] = df
             return df
         else:
-            logger.error(f"  No perpetual trades data for {symbol}")
+            logger.error(f"  No perpetual trades data for {storage_symbol}")
             return None
   
     def _loop_data_collection(self, function, ccxt_symbol: str, timeframe: str, limit: int,
@@ -1073,8 +1111,6 @@ class HistoricalDataCollector:
         list
             List of collected data records
         """
-        _is_utc(start_time)
-        _is_utc(end_time)
         _is_utc(start_time)
         _is_utc(end_time)
         # Calculate periods per day based on timeframe

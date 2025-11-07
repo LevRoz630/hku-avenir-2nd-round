@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from .johansen_test import johansen_test
 from .basket_generator import compute_spread
 from .deduplicate_baskets import filter_overlapping_baskets
+from .hmm_regimes import apply_regime_filter
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def _test_baskets_batch(args):
     Reconstructs DataFrame once per worker, then tests all baskets.
     Designed to be picklable for multiprocessing.
     """
-    price_data_dict, baskets_batch, labels_dict, include_states, policy, k = args
+    price_data_dict, baskets_batch, labels_dict, include_states, policy, k, coverage_threshold = args
     
     try:
         # Reconstruct price data DataFrame once per worker (not per basket!)
@@ -44,27 +45,21 @@ def _test_baskets_batch(args):
             try:
                 # Extract basket prices
                 basket_cols = [f'{sym}_close' for sym in basket]
-                # Optionally filter by regimes (policy='all' MVP)
                 price_df = price_data
                 if labels_df is not None and include_states is not None:
-                    state_cols = [f"{sym}_hmm_state" for sym in basket]
-                    if all(col in labels_df.columns for col in state_cols):
-                        aligned_index = price_df.index.intersection(labels_df.index)
-                        if len(aligned_index) == 0:
-                            continue
-                        states = labels_df.loc[aligned_index, state_cols]
-                        mask = np.ones(len(aligned_index), dtype=bool)
-                        # MVP: only 'all'
-                        for col in state_cols:
-                            mask &= states[col].isin(include_states).values
-                        filtered_index = aligned_index[mask]
-                        # Require sufficient observations after filtering
-                        if len(filtered_index) < len(basket) * 10:
-                            continue
-                        price_df = price_df.loc[filtered_index]
+                    price_df, coverage = apply_regime_filter(
+                        price_data=price_data,
+                        labels_df=labels_df,
+                        basket=basket,
+                        include_states=include_states,
+                        policy=policy,
+                        k=k,
+                        coverage_threshold=coverage_threshold,
+                    )
+                    if price_df.empty:
+                        continue
 
                 basket_prices = price_df[basket_cols].values
-
                 # Check for valid data
                 if np.any(basket_prices <= 0) or np.any(np.isnan(basket_prices)) or np.any(np.isinf(basket_prices)):
                     continue
@@ -75,7 +70,7 @@ def _test_baskets_batch(args):
                 log_prices = np.log(basket_prices)
 
                 # Run Johansen test
-                result = johansen_test(log_prices, p_value_threshold=0.05)
+                result = johansen_test(log_prices, p_value_threshold=0.01)
 
                 if not result['is_cointegrated']:
                     continue
@@ -117,6 +112,7 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
                                         include_states: Optional[Set[int]] = None,
                                         policy: str = 'all',
                                         k: Optional[int] = None,
+                                        coverage_threshold: Optional[float] = 0.4,
                                         max_workers: Optional[int] = None,
                                         batch_size: int = 100,
                                         deduplicate: bool = True,
@@ -178,7 +174,10 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
         batches.append(candidate_baskets[i:i + batch_size])
     
     # Prepare arguments (price_data_dict, baskets_batch, labels_dict, include_states, policy, k)
-    args_list = [(price_data_dict, batch, labels_dict, include_states, policy, k) for batch in batches]
+    args_list = [
+        (price_data_dict, batch, labels_dict, include_states, policy, k, coverage_threshold)
+        for batch in batches
+    ]
     
     cointegrated_baskets = []
     

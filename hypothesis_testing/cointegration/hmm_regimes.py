@@ -202,43 +202,58 @@ def apply_regime_filter(
     include_states: Optional[Set[int]] = None,
     policy: str = "all",
     k: Optional[int] = None,
-) -> pd.DataFrame:
+    coverage_threshold: Optional[float] = 0.4,
+) -> Tuple[pd.DataFrame, float]:
     """
     Filter price_data rows by per-symbol regimes for the given basket.
 
-    MVP supports policy='all' only: keep rows where all basket symbols are in include_states.
+    Supports policies: 'all', 'any', 'k_of_n'. Returns (filtered_df, coverage_ratio).
+    Falls back to unfiltered data if coverage drops below coverage_threshold.
     """
     if include_states is None:
-        return price_data
+        return price_data, 1.0
 
     # Align on common index
     idx = price_data.index
     if not labels_df.index.equals(idx):
         idx = idx.intersection(labels_df.index)
     if len(idx) == 0:
-        return price_data.iloc[0:0]
+        return price_data.iloc[0:0], 0.0
 
-    basket_cols = [f"{s}_close" for s in basket]
     state_cols = [f"{s}_hmm_state" for s in basket]
 
     missing_states = [c for c in state_cols if c not in labels_df.columns]
     if missing_states:
         # If any symbol lacks regimes, return empty to avoid leakage
-        return price_data.loc[idx].iloc[0:0]
+        return price_data.loc[idx].iloc[0:0], 0.0
 
     states = labels_df.loc[idx, state_cols]
-    if policy != "all":
-        raise ValueError("Only policy='all' is supported in MVP")
+    include_states = set(include_states)
 
-    mask = np.ones(len(idx), dtype=bool)
-    for col in state_cols:
-        mask &= states[col].isin(include_states).values
+    if policy == "all":
+        mask = np.ones(len(idx), dtype=bool)
+        for col in state_cols:
+            mask &= states[col].isin(include_states).values
+    elif policy == "any":
+        mask = states.isin(include_states).any(axis=1).values
+    elif policy == "k_of_n":
+        if k is None:
+            k = len(basket) - 1 if len(basket) > 1 else 1
+        mask = (states.isin(include_states).sum(axis=1) >= k).values
+    else:
+        raise ValueError("policy must be one of {'all', 'any', 'k_of_n'}")
 
     filtered_idx = idx[mask]
+    coverage = len(filtered_idx) / len(idx) if len(idx) else 0.0
+
+    if coverage_threshold is not None and coverage < coverage_threshold:
+        # Fallback to unfiltered data (aligned index) when coverage is too low
+        return price_data.loc[idx], coverage
+
     if len(filtered_idx) == 0:
-        return price_data.loc[idx].iloc[0:0]
-    # Return rows only for timestamps present after masking
-    return price_data.loc[filtered_idx, [c for c in price_data.columns if c in basket_cols or not c.endswith("_close") or True]]
+        return price_data.loc[idx].iloc[0:0], coverage
+
+    return price_data.loc[filtered_idx], coverage
 
 
 def train_and_persist_labels(

@@ -66,7 +66,7 @@ def main() -> None:
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
     # Run over the last ~90 days by default
-    end_date = datetime.now(timezone.utc) - timedelta(days=2)
+    end_date = datetime.now(timezone.utc) - timedelta(days=1)
     start_date = end_date - timedelta(days=2)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)

@@ -25,28 +25,23 @@ def _run_single_permutation_worker(args):
     
     try:
         data_manager = HistoricalDataCollector(historical_data_dir)
-        if market_type == "spot":
-            for sym in base_symbols:
-                if sym in data_snapshots.get('spot', {}):
-                    df = copy.deepcopy(data_snapshots['spot'][sym])
-                    if permutation_idx > 0:
-                        df = df.sample(frac=1, random_state=permutation_idx).reset_index(drop=True)
-                        df["timestamp"] = data_snapshots['spot'][sym]["timestamp"]
-                    data_manager.spot_ohlcv_data[sym] = df
-        elif market_type == "futures":
-            for sym in base_symbols:
-                if sym in data_snapshots.get('index_future', {}):
-                    df = copy.deepcopy(data_snapshots['index_future'][sym])
-                    if permutation_idx > 0:
-                        df = df.sample(frac=1, random_state=permutation_idx).reset_index(drop=True)
-                        df["timestamp"] = data_snapshots['index_future'][sym]["timestamp"]
-                    data_manager.perpetual_index_ohlcv_data[sym] = df
-                if sym in data_snapshots.get('mark_future', {}):
-                    df = copy.deepcopy(data_snapshots['mark_future'][sym])
-                    if permutation_idx > 0:
-                        df = df.sample(frac=1, random_state=permutation_idx + 1337).reset_index(drop=True)
-                        df["timestamp"] = data_snapshots['mark_future'][sym]["timestamp"]
-                    data_manager.perpetual_mark_ohlcv_data[sym] = df
+        if market_type != "futures":
+            raise ValueError("Only futures market type is supported")
+
+        for sym in base_symbols:
+            if sym in data_snapshots.get('mark_future', {}):
+                df = copy.deepcopy(data_snapshots['mark_future'][sym])
+                if permutation_idx > 0:
+                    df = df.sample(frac=1, random_state=permutation_idx + 1337).reset_index(drop=True)
+                    df["timestamp"] = data_snapshots['mark_future'][sym]["timestamp"]
+                data_manager.perpetual_mark_ohlcv_data[sym] = df
+            if sym in data_snapshots.get('index_future', {}):
+                df = copy.deepcopy(data_snapshots['index_future'][sym])
+                if permutation_idx > 0:
+                    df = df.sample(frac=1, random_state=permutation_idx).reset_index(drop=True)
+                    df["timestamp"] = data_snapshots['index_future'][sym]["timestamp"]
+                data_manager.perpetual_index_ohlcv_data[sym] = df
+
         oms_client = OMSClient(historical_data_dir=historical_data_dir)
         oms_client.positions = {}
         oms_client.trade_history = []
@@ -197,6 +192,7 @@ class Backtester:
 
     def get_cached_price(self, symbol: str, timestamp: datetime, instrument_type: str = None) -> float:
         """Get cached price or fetch and cache it."""
+        instrument_type = instrument_type or 'future'
         cache_key = f"{symbol}_{instrument_type}_{timestamp.isoformat()}"
 
         if cache_key in self.price_cache:
@@ -227,8 +223,7 @@ class Backtester:
         current_time = self.oms_client.current_time
 
         for symbol, pos in self.oms_client.positions.items():
-            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
-            current_price = self.get_cached_price(symbol, current_time, instrument_type)
+            current_price = self.get_cached_price(symbol, current_time, 'future')
             if not current_price:
                 continue
 
@@ -236,22 +231,20 @@ class Backtester:
             side = pos.get('side', 'LONG')
             entry = float(pos.get('entry_price', 0.0))
 
-            if instrument_type == 'future':
-                # Unrealized PnL contribution only
-                if abs(quantity) > 0:
-                    if side == 'LONG':
-                        unrealized = quantity * (current_price - entry)
-                    elif side == 'SHORT':
-                        unrealized = quantity * (entry - current_price)
-                    else:
-                        unrealized = 0.0
-                    total_value += unrealized
-                # Maintain notional and latest value fields for reporting
-                pos['value'] = abs(quantity) * current_price
-            else:
-                # Spot: include current market value
-                total_value += abs(quantity) * current_price
-                pos['value'] = abs(quantity) * current_price
+
+            if abs(quantity) > 0:
+                if side == 'LONG':
+                    unrealized = quantity * (current_price - entry)
+                elif side == 'SHORT':
+                    unrealized = quantity * (entry - current_price)
+                else:
+                    unrealized = 0.0
+                total_value += unrealized
+            # Maintain notional and latest value fields for reporting
+            position_value = abs(quantity) * current_price
+            pos['value'] = position_value
+            total_value += position_value
+            
 
         return total_value
 
@@ -304,26 +297,54 @@ class Backtester:
             logger.error(f"Error in run_backtest: {e}")
             return None
 
-        for sym in base_symbols:
-            try:
-                if market_type == "spot":
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
-                elif market_type == "futures":
-                    # this is data for the backtest loop
-                    self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
+        # Preload ALL data that will be needed during backtest execution
+        extended_end_date = end_date + timedelta(days=1)
+        required_data = []
 
-                    # this is data for price taking estiamtions when the position is opened  and risk management
-                    self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
-                else:
-                        raise ValueError(f"Invalid market type: {market_type}")
-            except Exception as e:
-                logger.error(f"Error loading data: {e} for {sym} for market type {market_type}")
+        if market_type != "futures":
+            raise ValueError("Only futures market type is supported")
+
+        for sym in base_symbols:
+            required_data.append((sym, "15m", 'mark_ohlcv_futures', data_start_date, extended_end_date))
+            required_data.append((sym, "15m", 'index_ohlcv_futures', data_start_date, extended_end_date))
+            if desired_timeframe != "15m":
+                required_data.append((sym, desired_timeframe, 'mark_ohlcv_futures', data_start_date, extended_end_date))
+
+        seen = set()
+        unique_required = []
+        for item in required_data:
+            key = (item[0], item[1], item[2])
+            if key in seen:
                 continue
+            seen.add(key)
+            unique_required.append(item)
+
+        requested_start = start_date
+
+        for data_spec in unique_required:
+            sym, timeframe, data_type, preload_start, preload_end = data_spec
+            try:
+                self.data_manager.load_data_period(sym, timeframe, data_type, preload_start, preload_end, save_to_class=True, load_from_class=False, export=True)
+                logger.debug(f"Preloaded {data_type} data for {sym} ({timeframe}) from {preload_start} to {preload_end}")
+            except Exception as e:
+                logger.error(f"Error preloading {data_type} data for {sym}: {e}")
+                continue
+
+        # Verify data was cached
+        mark_keys = list(self.data_manager.perpetual_mark_ohlcv_data.keys()) if hasattr(self.data_manager, 'perpetual_mark_ohlcv_data') else []
+        index_keys = list(self.data_manager.perpetual_index_ohlcv_data.keys()) if hasattr(self.data_manager, 'perpetual_index_ohlcv_data') else []
+        logger.debug(f"Mark data cached for symbols: {mark_keys}")
+        logger.debug(f"Index data cached for symbols: {index_keys}")
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
         for sym in base_symbols:
-            for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
+            stores_to_check = [
+                self.data_manager.perpetual_mark_ohlcv_data,
+                self.data_manager.perpetual_index_ohlcv_data
+            ]
+
+            for store in stores_to_check:
                 df = store.get(sym)
                 if df is not None and not df.empty:
                     first = df['timestamp'].min()  # first available candle for this store
@@ -333,10 +354,9 @@ class Backtester:
                         first = first.tz_localize('UTC')
                     earliest_ts = first if earliest_ts is None or first < earliest_ts else earliest_ts
 
-        aligned_start = start_date
+        aligned_start = requested_start
         if earliest_ts is not None:
-            # Ensure start_date is timezone-aware in UTC for comparison
-            s = pd.Timestamp(start_date)
+            s = pd.Timestamp(requested_start)
             e = pd.Timestamp(earliest_ts)
             if s.tz is None:
                 s = s.tz_localize('UTC')
@@ -346,8 +366,10 @@ class Backtester:
                 e = e.tz_localize('UTC')
             else:
                 e = e.tz_convert('UTC')
-            if s < e:
-                aligned_start = earliest_ts
+            aligned_start = max(s, e)
+
+        if aligned_start.tzinfo is None:
+            aligned_start = aligned_start.tz_localize('UTC')
 
         # Define start and end times for the strategy
         strategy.start_time = aligned_start
@@ -413,9 +435,8 @@ class Backtester:
                         exposures = {}
                         current_time = self.oms_client.current_time
                         for symbol, pos in self.oms_client.positions.items():
-                            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
                             # Use cached price for better performance
-                            current_price = self.get_cached_price(symbol, current_time, instrument_type)
+                            current_price = self.get_cached_price(symbol, current_time, 'future')
                             if not current_price:
                                 continue
                             qty = float(pos.get('quantity', 0.0))
@@ -473,46 +494,42 @@ class Backtester:
 
         data_path = Path(self.historical_data_dir)
         symbols = strategy.symbols
-        # Extract base symbols by removing both -USDT and -PERP suffixes
         base_symbols = [s.replace('-PERP', '').replace('-USDT', '') for s in symbols]
         data_path.mkdir(parents=True, exist_ok=True)
         if time_step is None:
             raise ValueError("Time step is required")
         desired_timeframe = self._time_step_to_timeframe(time_step)
 
+        if market_type != "futures":
+            raise ValueError("Only futures market type is supported")
+
         data_start_date = start_date - timedelta(days=strategy.lookback_days + 2)
+        extended_end_date = end_date + timedelta(days=1)
+
         for sym in base_symbols:
-            if market_type == "spot":
-                self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
-            elif market_type == "futures":
-                self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
-                self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
+            self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, extended_end_date, save_to_class=True, load_from_class=False, export=True)
+            self.data_manager.load_data_period(sym, "15m", 'index_ohlcv_futures', data_start_date, extended_end_date, save_to_class=True, load_from_class=False, export=True)
+            if desired_timeframe != "15m":
+                self.data_manager.load_data_period(sym, desired_timeframe, 'mark_ohlcv_futures', data_start_date, extended_end_date, save_to_class=True, load_from_class=False, export=True)
+
         starting_balance = float(self.oms_client.balance['USDT'])
 
         data_snapshots = {
-            'spot': {},
-            'index_future': {},
-            'mark_future': {}
+            'mark_future': {},
+            'index_future': {}
         }
 
         for sym in base_symbols:
-            if market_type == "spot":
-                df = self.data_manager.spot_ohlcv_data.get(sym)
-                if df is not None:
-                    data_snapshots['spot'][sym] = df.copy()
-            elif market_type == "futures":
-                df_idx = self.data_manager.perpetual_index_ohlcv_data.get(sym)
-                if df_idx is not None:
-                    data_snapshots['index_future'][sym] = df_idx.copy()
-                df_mark = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
-                if df_mark is not None:
-                    data_snapshots['mark_future'][sym] = df_mark.copy()
-            else:
-                raise ValueError(f"Invalid market type: {market_type}")
+            df_mark = self.data_manager.perpetual_mark_ohlcv_data.get(sym)
+            if df_mark is not None:
+                data_snapshots['mark_future'][sym] = df_mark.copy()
+            df_idx = self.data_manager.perpetual_index_ohlcv_data.get(sym)
+            if df_idx is not None:
+                data_snapshots['index_future'][sym] = df_idx.copy()
 
         earliest_ts = None
         for sym in base_symbols:
-            for store in [self.data_manager.spot_ohlcv_data, self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
+            for store in [self.data_manager.perpetual_mark_ohlcv_data, self.data_manager.perpetual_index_ohlcv_data]:
                 df = store.get(sym)
                 if df is not None and not df.empty:
                     first = df['timestamp'].min()
