@@ -262,9 +262,6 @@ class OMSClient:
             side = pos.get('side', 'LONG')
             entry = float(pos.get('entry_price', 0.0))
 
-            position_value = abs(quantity) * current_price
-            pos['value'] = position_value
-
             if abs(quantity) > 0:
                 if side == 'LONG':
                     unrealized = quantity * (current_price - entry)
@@ -273,7 +270,14 @@ class OMSClient:
                 else:
                     unrealized = 0.0
                 total_value += unrealized
+
+                        # Maintain notional value field for reporting only
+            
+            position_value = abs(quantity) * entry
             total_value += position_value
+            
+            pos['value'] = abs(quantity) * current_price
+            
         return total_value
 
     def get_position_summary(self) -> Dict[str, Any]:
@@ -293,13 +297,13 @@ class OMSClient:
                     entry = float(pos['entry_price'])
                     unrealized = qty * ((current_price - entry) if pos['side'] == 'LONG' else (entry - current_price))
                     summary['positions'][symbol] = {
-                        'quantity': qty,
-                        'side': pos['side'],
-                        'entry_price': entry,
-                        'current_price': current_price,
-                        'unrealized_pnl': unrealized,
-                        'value': abs(qty) * current_price
-                    }
+                            'quantity': qty,
+                            'side': pos['side'],
+                            'entry_price': entry,
+                            'current_price': current_price,
+                            'unrealized_pnl': unrealized,
+                            'value': abs(qty) * current_price
+                        }
         
         return summary
 

@@ -81,21 +81,48 @@ class PositionManager:
             # 1. Strategy CLOSE orders take precedence - pass through immediately
             close_orders = [o for o in orders if o.get('side') == 'CLOSE']
             open_orders = [o for o in orders if o.get('side') != 'CLOSE']
-            
+
+            # Separate basket orders from pair orders
+            basket_orders = [o for o in open_orders if o.get('pair_id', '').startswith('basket_')]
+            pair_orders = [o for o in open_orders if not o.get('pair_id', '').startswith('basket_')]
+
             logger.info(f"  - CLOSE orders: {len(close_orders)}")
-            logger.info(f"  - OPEN orders: {len(open_orders)}")
+            logger.info(f"  - PAIR orders: {len(pair_orders)}")
+            logger.info(f"  - BASKET orders: {len(basket_orders)}")
+
+            # For basket orders, apply simple sizing and pass through
+            sized_basket_orders = []
+            for order in basket_orders:
+                # Simple sizing: use the requested value directly
+                sized_order = order.copy()
+                sized_basket_orders.append(sized_order)
+
+            # Process pair orders with existing logic
+            open_orders = pair_orders
             
             # 2. Build pair registry from orders if not already initialized
             if not self.pair_registry:
                 self._build_pair_registry_from_orders(open_orders)
-            
+
             # 3. Get existing positions and map to pairs
             existing_pair_positions = self._get_current_pair_positions()
+
+            # If no registry was built but we have existing positions, try to build registry from positions
+            if not self.pair_registry and existing_pair_positions:
+                logger.info("Building pair registry from existing positions")
+                self._build_pair_registry_from_positions(existing_pair_positions)
+                # Re-get positions now that registry is built
+                existing_pair_positions = self._get_current_pair_positions()
             
-            logger.info(f"Existing positions: {len(existing_pair_positions)} pairs")
+            total_positions = len(existing_pair_positions)
+            basket_count = sum(1 for p in existing_pair_positions.values() if p.get('is_basket', False))
+            pair_count = total_positions - basket_count
+
+            logger.info(f"Existing positions: {pair_count} pairs, {basket_count} baskets")
             for pair_id, pair_data in existing_pair_positions.items():
                 symbols = pair_data.get('symbols', [])
-                logger.info(f"  - {pair_id}: {len(symbols)} legs")
+                pos_type = "basket" if pair_data.get('is_basket', False) else "pair"
+                logger.info(f"  - {pair_id} ({pos_type}): {len(symbols)} legs")
             
             # Early return if no orders and no existing positions
             if not open_orders and not existing_pair_positions:
@@ -208,12 +235,13 @@ class PositionManager:
             self._update_pair_state(all_pairs_dict, optimal_allocations)
             
             # Summary
-            final_orders = close_orders + rebalance_orders + sized_new_orders
+            final_orders = close_orders + rebalance_orders + sized_new_orders + sized_basket_orders
             logger.info(f"\nFINAL SUMMARY:")
             logger.info(f"  Total orders to execute: {len(final_orders)}")
             logger.info(f"    - CLOSE: {len(close_orders)}")
             logger.info(f"    - REBALANCE: {len(rebalance_orders)}")
             logger.info(f"    - NEW TRADES: {len(sized_new_orders)}")
+            logger.info(f"    - BASKET ORDERS: {len(sized_basket_orders)}")
             logger.info(f"{'='*80}\n")
             
             return final_orders
@@ -240,25 +268,45 @@ class PositionManager:
             }
     
     def _build_pair_registry_from_orders(self, orders: List[Dict[str, Any]]) -> None:
-        """Build pair registry from orders by parsing pair_id."""
+        """Build pair/basket registry from orders by parsing pair_id."""
         for order in orders:
             pair_id = order.get('pair_id')
             if not pair_id or pair_id in self.pair_registry:
                 continue
-            
-            # Parse pair_id format: "APT-USDT_NEAR-USDT"
-            pair_parts = pair_id.split('_')
-            if len(pair_parts) != 2:
-                continue
-            
-            a_base = pair_parts[0].replace('-USDT', '')
-            b_base = pair_parts[1].replace('-USDT', '')
-            self.pair_registry[pair_id] = {
-                'a_symbol': f"{a_base}-PERP",
-                'b_symbol': f"{b_base}-PERP",
-                'a_base': a_base,
-                'b_base': b_base
-            }
+
+            # Handle both pair format ("APT-USDT_NEAR-USDT") and basket format ("basket_1_GRT_NEAR_RENDER_ICP_FIL_SAND")
+            if pair_id.startswith('basket_'):
+                # Basket format: extract symbols from the basket name
+                # Format: basket_{idx}_{symbol1}_{symbol2}_{symbol3}...
+                parts = pair_id.split('_')
+                if len(parts) < 3:
+                    continue
+
+                # Extract symbols (everything after basket_{idx}_)
+                symbol_bases = parts[2:]
+                symbols_perp = [f"{base}-PERP" for base in symbol_bases]
+
+                # For basket registry, store as a list of symbols
+                self.pair_registry[pair_id] = {
+                    'symbols': symbols_perp,
+                    'symbol_bases': symbol_bases,
+                    'is_basket': True
+                }
+            else:
+                # Pair format: "APT-USDT_NEAR-USDT"
+                pair_parts = pair_id.split('_')
+                if len(pair_parts) != 2:
+                    continue
+
+                a_base = pair_parts[0].replace('-USDT', '')
+                b_base = pair_parts[1].replace('-USDT', '')
+                self.pair_registry[pair_id] = {
+                    'a_symbol': f"{a_base}-PERP",
+                    'b_symbol': f"{b_base}-PERP",
+                    'a_base': a_base,
+                    'b_base': b_base,
+                    'is_basket': False
+                }
     
     def _group_orders_by_pair(self, orders: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """Group orders by pair_id."""
@@ -274,7 +322,26 @@ class PositionManager:
             pairs_dict[pair_id].append(order)
         
         return pairs_dict
-    
+
+    def _build_pair_registry_from_positions(self, existing_pair_positions: Dict[str, Dict[str, Any]]) -> None:
+        """Build pair registry from existing positions when no orders are present."""
+        for pair_id, position_data in existing_pair_positions.items():
+            if pair_id not in self.pair_registry:
+                symbols = list(position_data.get('positions', {}).keys())
+                if len(symbols) == 2:
+                    # Assume it's a pair
+                    self.pair_registry[pair_id] = {
+                        'a_symbol': symbols[0],
+                        'b_symbol': symbols[1],
+                        'is_basket': False
+                    }
+                else:
+                    # Assume it's a basket
+                    self.pair_registry[pair_id] = {
+                        'symbols': symbols,
+                        'is_basket': True
+                    }
+
     def _compute_strategy_returns(self, pairs_dict: Dict[str, List[Dict[str, Any]]]) -> pd.DataFrame:
         """
         Compute strategy returns instead of spread returns.
@@ -589,26 +656,32 @@ class PositionManager:
     
     def _get_current_pair_positions(self) -> Dict[str, Dict[str, Any]]:
         """
-        Get existing positions grouped by pair_id.
-        Returns: {pair_id: {'symbols': [symbol1, symbol2], 'positions': {symbol: pos_data}}}
-        Handles partial positions (only one leg) - will close remaining leg (decision 14).
+        Get existing positions grouped by pair_id/basket_id.
+        Returns: {pair_id: {'symbols': [symbol1, symbol2, ...], 'positions': {symbol: pos_data}}}
+        Handles partial positions and baskets.
         """
         existing_pairs = {}
-        
+
         # Build symbol to pair_id mapping from registry
         symbol_to_pair = {}
         for pair_id, pair_info in self.pair_registry.items():
-            symbol_to_pair[pair_info['a_symbol']] = pair_id
-            symbol_to_pair[pair_info['b_symbol']] = pair_id
-        
-        # Also parse from pair_id if symbol not in registry (fallback)
+            if pair_info.get('is_basket', False):
+                # Basket: map all symbols to this basket_id
+                for symbol in pair_info.get('symbols', []):
+                    symbol_to_pair[symbol] = pair_id
+            else:
+                # Pair: map a_symbol and b_symbol
+                symbol_to_pair[pair_info['a_symbol']] = pair_id
+                symbol_to_pair[pair_info['b_symbol']] = pair_id
+
+        # Process all positions
         for symbol, pos in self.oms_client.positions.items():
             if abs(pos.get('quantity', 0)) <= 0:
                 continue
-            
+
             # Try to find pair_id from registry
             pair_id = symbol_to_pair.get(symbol)
-            
+
             # Fallback: parse from symbol if not in registry
             if not pair_id:
                 base = symbol.replace('-PERP', '')
@@ -616,7 +689,7 @@ class PositionManager:
                     if base in pid:
                         pair_id = pid
                         break
-            
+
             # If still not found, try to infer from pair_id format in registry
             if not pair_id:
                 # Try to find any pair_id containing this base
@@ -624,17 +697,18 @@ class PositionManager:
                     if base in pid:
                         pair_id = pid
                         break
-            
+
             if not pair_id:
                 logger.debug(f"Could not map symbol {symbol} to pair_id")
                 continue
-            
+
             if pair_id not in existing_pairs:
                 existing_pairs[pair_id] = {
                     'symbols': [],
-                    'positions': {}
+                    'positions': {},
+                    'is_basket': self.pair_registry.get(pair_id, {}).get('is_basket', False)
                 }
-            
+
             existing_pairs[pair_id]['symbols'].append(symbol)
             existing_pairs[pair_id]['positions'][symbol] = pos
         
@@ -968,7 +1042,14 @@ class PositionManager:
             
             # Update side from orders
             if open_orders:
-                # Infer side from order sides
+                # Check if this is a basket (skip pair-specific logic)
+                is_basket = self.pair_registry.get(pair_id, {}).get('is_basket', False)
+                if is_basket:
+                    # For baskets, just store that we have orders
+                    self.pair_state[pair_id]['has_orders'] = True
+                    continue
+
+                # Infer side from order sides (pair logic)
                 sides = [o.get('side') for o in open_orders]
                 symbols = [o.get('symbol') for o in open_orders]
                 if len(sides) == 2 and len(symbols) == 2:

@@ -135,6 +135,7 @@ class V3CointegrationStrategy:
                 "mark_ohlcv_futures",
                 start_time,
                 end_time,
+                load_from_class=True,
             )
 
             if df is None or df.empty:

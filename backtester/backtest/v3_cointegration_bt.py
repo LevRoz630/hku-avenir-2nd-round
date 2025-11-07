@@ -54,20 +54,21 @@ def main() -> None:
         timeframe="15m",
     )
 
-    # Get max lookback_days from strategy (baskets have lookback_days of 30-45)
-    max_basket_lookback = strategy.lookback_days if strategy else 30
-    min_lookback_days = max(max_basket_lookback, 30)
+    logger.info(f"Strategy symbols: {strategy.symbols}")
+
+    # Get lookback days from strategy (baskets need at least 30 days)
+    lookback_days = max(strategy.lookback_days, 30)
 
     position_manager = PositionManager(
         risk_method='max_sharpe',
         max_total_allocation=500.0,
-        min_lookback_days=min_lookback_days,
+        min_lookback_days=lookback_days,
     )
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
-    # Run over the last ~90 days by default
-    end_date = datetime.now(timezone.utc) - timedelta(days=1)
-    start_date = end_date - timedelta(days=2)
+    # Run over the last 2 days by default
+    end_date = datetime.now(timezone.utc) - timedelta(days=90)
+    start_date = end_date - timedelta(days=3)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)
 
@@ -85,10 +86,10 @@ def main() -> None:
 
     backtester.save_results(results, "v3_cointegration_bt")
 
-    # Load and plot regime data for comparison (auto-generates if missing)
+    # Generate and plot regime data for comparison (if sufficient data quality)
     # This shows HMM volatility regimes (green=low vol, red=high vol) alongside performance
-    if backtester.load_regime_data():
-        backtester.plot_regimes()
+    backtester.load_regime_data()  # Always try to generate, may be empty for short periods
+    backtester.plot_regimes()  # Silently skips if no valid regime data
 
     backtester.plot_portfolio_value()
     backtester.plot_drawdown()
@@ -98,5 +99,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

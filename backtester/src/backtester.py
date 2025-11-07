@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from oms_simulation import OMSClient
 import logging
 import numpy as np
@@ -52,6 +52,9 @@ def _run_single_permutation_worker(args):
         strategy = strategy_class(**strategy_init_args)
         strategy.start_time = aligned_start
         strategy.end_time = end_date
+
+        self.last_backtest_start = aligned_start
+        self.last_backtest_end = end_date
         
         position_manager = position_manager_class(**position_manager_init_args)
         
@@ -186,6 +189,10 @@ class Backtester:
 
         # Regime data for plotting
         self.regime_data = None
+        self.last_backtest_start: Optional[datetime] = None
+        self.last_backtest_end: Optional[datetime] = None
+        self.requested_backtest_start: Optional[datetime] = None
+        self.requested_backtest_end: Optional[datetime] = None
 
         # Price cache for performance optimization
         self.price_cache = {}
@@ -240,21 +247,24 @@ class Backtester:
                 else:
                     unrealized = 0.0
                 total_value += unrealized
-            # Maintain notional and latest value fields for reporting
+
+            # Maintain notional value field for reporting only
             position_value = abs(quantity) * current_price
             pos['value'] = position_value
-            total_value += position_value
             
 
         return total_value
 
-    def run_backtest(self, 
+    def run_backtest(self,
                         strategy: Any,
                         position_manager: Any,
                         start_date: datetime = None,
                         end_date: datetime = None,
                         time_step: timedelta = None,
                         market_type: str = None) -> Dict[str, Any]:
+        # Store the originally requested dates for regime filtering
+        self.requested_backtest_start = start_date
+        self.requested_backtest_end = end_date
         """
         Execute a strategy over historical data and return performance.
 
@@ -324,17 +334,12 @@ class Backtester:
         for data_spec in unique_required:
             sym, timeframe, data_type, preload_start, preload_end = data_spec
             try:
-                self.data_manager.load_data_period(sym, timeframe, data_type, preload_start, preload_end, save_to_class=True, load_from_class=False, export=True)
-                logger.debug(f"Preloaded {data_type} data for {sym} ({timeframe}) from {preload_start} to {preload_end}")
+                result = self.data_manager.load_data_period(sym, timeframe, data_type, preload_start, preload_end, save_to_class=True, load_from_class=False, export=True)
+                if result is None or result.empty:
+                    logger.warning(f"No {data_type} data available for {sym} ({timeframe}) in period {preload_start} to {preload_end}")
             except Exception as e:
                 logger.error(f"Error preloading {data_type} data for {sym}: {e}")
                 continue
-
-        # Verify data was cached
-        mark_keys = list(self.data_manager.perpetual_mark_ohlcv_data.keys()) if hasattr(self.data_manager, 'perpetual_mark_ohlcv_data') else []
-        index_keys = list(self.data_manager.perpetual_index_ohlcv_data.keys()) if hasattr(self.data_manager, 'perpetual_index_ohlcv_data') else []
-        logger.debug(f"Mark data cached for symbols: {mark_keys}")
-        logger.debug(f"Index data cached for symbols: {index_keys}")
 
         # Align start time to earliest available data so prices exist at t0
         earliest_ts = None
@@ -394,28 +399,13 @@ class Backtester:
                 total_value = self._update_portfolio_value_cached()
                 self.portfolio_values.append(total_value)
 
-                # Progress reporting every 10% completion
-                progress_pct = int((iteration / total_iterations) * 100)
-                if progress_pct % 10 == 0 and progress_pct > 0 and iteration % (total_iterations // 10) == 0:
-                    logger.info(f"Progress: {progress_pct}% complete - Portfolio Value: {total_value:.2f}")
-
-                # Detailed logging every 500 iterations for debugging
-                if iteration % 500 == 0:
-                    logger.debug(f"Iteration {iteration}: Portfolio Value: {total_value:.2f}")
-
-                    # Pretty-print balances and positions (less frequently)
-                    try:
-                        positions_tbl = format_positions_table(self.oms_client.get_position())
-                        logger.debug(f"\nPositions:\n{positions_tbl}")
-                    except Exception as _e:
-                        summary = self.oms_client.get_position_summary()
-                        logger.debug(f"Position Summary: {summary}")
-
+                # Get current orders from strategy
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
 
-                # we pass the oms and data manager to the position manager so it would have the most up to date information
+                # Filter orders through position manager
                 filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
 
+                # Execute filtered orders
                 if filtered_orders is not None:
                     for order in filtered_orders:
                         try:
@@ -428,6 +418,28 @@ class Backtester:
                         except Exception as e:
                             logger.error(f"Error setting target position: {e}")
                             continue
+
+                # Log at every iteration: time, portfolio value, and current orders
+                current_time = self.oms_client.current_time.strftime('%Y-%m-%d %H:%M:%S')
+                logger.info(f"{current_time} | Portfolio: ${total_value:.2f}")
+
+                # Format and display current orders if any
+                if filtered_orders and len(filtered_orders) > 0:
+                    try:
+                        orders_data = []
+                        for order in filtered_orders:
+                            orders_data.append({
+                                'Symbol': order['symbol'],
+                                'Type': order['instrument_type'],
+                                'Side': order['side'],
+                                'Value': f"${order.get('value', 0.0):.2f}"
+                            })
+
+                        if orders_data:
+                            orders_df = pd.DataFrame(orders_data)
+                            logger.info(f"Orders executed:\n{orders_df.to_string(index=False)}")
+                    except Exception as e:
+                        logger.debug(f"Could not format orders table: {e}")
 
                 # Snapshot signed notional exposures less frequently (every 10 iterations)
                 if iteration % 10 == 0:
@@ -464,6 +476,9 @@ class Backtester:
 
         # Calculate final performance metrics
         self.calculate_performance_metrics()
+        # Get final portfolio value
+        final_portfolio_value = self.portfolio_values[-1] if self.portfolio_values else self.oms_client.balance['USDT']
+
         # Return results
         results = {
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
@@ -473,6 +488,7 @@ class Backtester:
             'sharpe_ratio': self.sharpe_ratio,
             'trade_history': self.oms_client.trade_history,
             'final_balance': self.oms_client.balance,
+            'final_portfolio_value': final_portfolio_value,
             'final_positions': self.oms_client.get_position()
         }
 
@@ -787,30 +803,21 @@ class Backtester:
         )
         fig.show()
 
-    def load_regime_data(self, regime_labels_path: str = None, generate_if_missing: bool = True):
-        """Load HMM regime labels for visualization. Generate if missing."""
+    def load_regime_data(self, regime_labels_path: str = None):
+        """Generate HMM regime labels for visualization from current backtest data."""
         if regime_labels_path is None:
             # Default path based on hypothesis testing artifacts
             repo_root = Path(__file__).parent.parent.parent
             regime_labels_path = repo_root / "hypothesis_testing" / "cointegration" / "artifacts" / "hmm_labels_15m_mark.parquet"
 
         try:
-            if regime_labels_path.exists():
-                self.regime_data = pd.read_parquet(regime_labels_path)
-                logger.info(f"Loaded regime data from {regime_labels_path}")
-                return True
-            elif generate_if_missing:
-                logger.info(f"Regime data not found at {regime_labels_path}. Generating...")
-                return self._generate_regime_data(regime_labels_path)
-            else:
-                logger.warning(f"Regime labels file not found at {regime_labels_path}")
-                return False
+            return self._generate_regime_data(regime_labels_path)
         except Exception as e:
-            logger.error(f"Error loading regime data: {e}")
+            logger.error(f"Error generating regime data: {e}")
             return False
 
     def _generate_regime_data(self, output_path: Path) -> bool:
-        """Generate HMM regime labels from price data."""
+        """Generate HMM regime labels from backtester's loaded data."""
         try:
             # Add hypothesis testing path for imports
             sys.path.append(str(Path(__file__).parent.parent.parent / "hypothesis_testing" / "cointegration"))
@@ -818,48 +825,42 @@ class Backtester:
             # Import required functions
             from hmm_regimes import train_and_persist_labels
 
-            # Load price data from backtester data directory
-            repo_root = Path(__file__).parent.parent.parent
-            data_dir = repo_root / "hku-data" / "test_data"
+            # Get mark price data from the backtester's data manager
+            mark_data = self.data_manager.perpetual_mark_ohlcv_data
 
-            logger.info(f"Loading price data from {data_dir}")
-
-            # Find all mark price files
-            price_files = list(data_dir.glob("perpetual_*_mark_15m_*.parquet"))
-            if not price_files:
-                logger.error("No price data files found")
+            if not mark_data:
                 return False
 
-            logger.info(f"Found {len(price_files)} price data files")
-
-            # Load and combine price data
+            # Combine all loaded symbols
             price_frames = []
-            for file_path in price_files:
-                try:
-                    df = pd.read_parquet(file_path)
-                    symbol = file_path.name.split('_')[1]  # Extract symbol from filename
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    df = df.set_index('timestamp')
-                    close_col = f"{symbol}_close"
-                    price_series = df[['close']].rename(columns={'close': close_col})
-                    price_frames.append(price_series)
-                except Exception as e:
-                    logger.warning(f"Error loading {file_path}: {e}")
-                    continue
+            for symbol, df in mark_data.items():
+                if df is not None and not df.empty:
+                    try:
+                        # Ensure timestamp is datetime index
+                        if 'timestamp' in df.columns:
+                            df = df.set_index('timestamp')
+                        if not isinstance(df.index, pd.DatetimeIndex):
+                            df.index = pd.to_datetime(df.index)
+
+                        close_col = f"{symbol}_close"
+                        price_series = df[['close']].rename(columns={'close': close_col})
+                        price_frames.append(price_series)
+                    except Exception as e:
+                        logger.warning(f"Error processing {symbol} data: {e}")
+                        continue
 
             if not price_frames:
-                logger.error("No valid price data loaded")
+                logger.error("No valid price data found in backtester")
                 return False
 
             # Combine all symbols
             price_data = pd.concat(price_frames, axis=1, join='outer').dropna(how='all')
-            logger.info(f"Combined data shape: {price_data.shape}")
 
             # Generate regime labels
             bars_per_day = 96  # 15m bars * 24 hours
             meta = {
                 'generated_at': datetime.now().isoformat(),
-                'source': 'backtester_auto_generation',
+                'source': 'backtester_loaded_data',
                 'timeframe': '15m',
                 'price_type': 'mark',
                 'bars_per_day': bars_per_day,
@@ -875,7 +876,8 @@ class Backtester:
 
             # Load the generated data
             self.regime_data = labels_df
-            logger.info(f"Successfully generated and loaded regime data: {labels_df.shape}")
+            if labels_df.empty:
+                logger.info("No regime data generated - insufficient data quality or time period too short for HMM analysis")
             return True
 
         except Exception as e:
@@ -884,15 +886,48 @@ class Backtester:
 
     def plot_regimes(self):
         """Plot HMM regime states over time as a heatmap."""
-        if self.regime_data is None:
-            logger.warning("No regime data loaded. Call load_regime_data() first.")
-            return
+        if self.regime_data is None or self.regime_data.empty:
+            return  # Silently skip if no regime data available
+
+        regime_df = self.regime_data
+
+        # Use requested backtest dates for regime filtering
+        filter_start = self.requested_backtest_start or self.last_backtest_start
+        filter_end = self.requested_backtest_end or self.last_backtest_end
+
+        if isinstance(regime_df.index, pd.DatetimeIndex) and filter_start and filter_end:
+            # Convert backtest dates to pandas Timestamps in UTC
+            start_ts = pd.Timestamp(filter_start)
+            end_ts = pd.Timestamp(filter_end)
+
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.tz_localize('UTC')
+            elif start_ts.tzinfo != timezone.utc:
+                start_ts = start_ts.tz_convert('UTC')
+
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.tz_localize('UTC')
+            elif end_ts.tzinfo != timezone.utc:
+                end_ts = end_ts.tz_convert('UTC')
+
+            # Match timezone awareness for comparison
+            if regime_df.index.tz is None:
+                start_cmp = start_ts.tz_localize(None)
+                end_cmp = end_ts.tz_localize(None)
+            else:
+                start_cmp = start_ts.tz_convert(regime_df.index.tz)
+                end_cmp = end_ts.tz_convert(regime_df.index.tz)
+
+            # Filter the data
+            filtered = regime_df.loc[(regime_df.index >= start_cmp) & (regime_df.index <= end_cmp)]
+
+            if not filtered.empty:
+                regime_df = filtered
 
         # Get regime columns (ending with _hmm_state)
-        regime_cols = [col for col in self.regime_data.columns if col.endswith('_hmm_state')]
-        if not regime_cols:
-            logger.warning("No HMM state columns found in regime data")
-            return
+        regime_cols = [col for col in regime_df.columns if col.endswith('_hmm_state')]
+        if not regime_cols or regime_df.empty:
+            return  # Silently skip if no valid regime data
 
         # Extract symbol names from column names
         symbols = [col.replace('_hmm_state', '') for col in regime_cols]
@@ -900,8 +935,8 @@ class Backtester:
         # Create heatmap
         colorscale = [[0, 'green'], [1, 'red']]
         fig = go.Figure(data=go.Heatmap(
-            z=self.regime_data[regime_cols].values.T,
-            x=self.regime_data.index,
+            z=regime_df[regime_cols].values.T,
+            x=regime_df.index,
             y=symbols,
             colorscale=colorscale,
             zmin=0,
@@ -937,7 +972,8 @@ class Backtester:
         print(f"Total Return: {results['total_return']:.2%}")
         print(f"Max Drawdown: {results['max_drawdown']:.2%}")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-        print(f"Final Balance: {results['final_balance']}")
+        print(f"Final Portfolio Value: ${results['final_portfolio_value']:.2f}")
+        print(f"Cash Balance: {results['final_balance']}")
         print(f"Number of Trades: {len(results['trade_history'])}")
         print("="*50)
 
