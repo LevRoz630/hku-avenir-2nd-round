@@ -324,15 +324,20 @@ class HistoricalDataCollector:
             logger.error(f"Error loading data: {e} for {symbol}")
             return None
         # Normalize DataFrame timestamps to tz-aware UTC (inputs already validated as UTC)
+        filtered_data = filtered_data.copy()
+
         if not pd.api.types.is_datetime64_any_dtype(filtered_data["timestamp"]):
-            filtered_data.loc[:, "timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
+            filtered_data["timestamp"] = pd.to_datetime(filtered_data["timestamp"], errors='coerce', utc=True)
         else:
             ts = filtered_data["timestamp"]
             if ts.dt.tz is None:
-                filtered_data.loc[:, "timestamp"] = ts.dt.tz_localize('UTC')
+                # Convert to UTC - use astype to ensure proper dtype
+                localized_ts = ts.dt.tz_localize('UTC')
+                filtered_data["timestamp"] = localized_ts.astype('datetime64[ns, UTC]')
             else:
                 # Convert to UTC and ensure dtype compatibility
-                filtered_data.loc[:, "timestamp"] = pd.to_datetime(ts.dt.tz_convert('UTC'), utc=True)
+                converted_ts = ts.dt.tz_convert('UTC')
+                filtered_data["timestamp"] = converted_ts.astype('datetime64[ns, UTC]')
         
         # Filter data to the requested time period (start_date/end_date already UTC)
         filtered_data = filtered_data[(filtered_data["timestamp"] >= start_date) & (filtered_data["timestamp"] <= end_date)]
@@ -372,10 +377,13 @@ class HistoricalDataCollector:
             ts = df['timestamp']
 
             if df['timestamp'].dt.tz is None:
-                df.loc[:, 'timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+                # Convert to UTC - use astype to ensure proper dtype
+                localized_ts = df['timestamp'].dt.tz_localize('UTC')
+                df['timestamp'] = localized_ts.astype('datetime64[ns, UTC]')
             else:
                 # Convert to UTC and ensure dtype compatibility
-                df.loc[:, 'timestamp'] = pd.to_datetime(df['timestamp'].dt.tz_convert('UTC'), utc=True)
+                converted_ts = df['timestamp'].dt.tz_convert('UTC')
+                df['timestamp'] = converted_ts.astype('datetime64[ns, UTC]')
             filtered = df[(df['timestamp'] >= s) & (df['timestamp'] <= e)]
             return filtered if not filtered.empty else None
         except Exception as e:
@@ -411,10 +419,13 @@ class HistoricalDataCollector:
                         df['timestamp'] = pd.to_datetime(ts, errors='coerce')
                 # Force cached data timestamps to UTC timezone for consistent comparisons
                 if df['timestamp'].dt.tz is None:
-                    df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+                    # Convert to UTC - use astype to ensure proper dtype
+                    localized_ts = df['timestamp'].dt.tz_localize('UTC')
+                    df['timestamp'] = localized_ts.astype('datetime64[ns, UTC]')
                 else:
                     # Convert to UTC and ensure dtype compatibility
-                    df['timestamp'] = pd.to_datetime(df['timestamp'].dt.tz_convert('UTC'), utc=True)
+                    converted_ts = df['timestamp'].dt.tz_convert('UTC')
+                    df['timestamp'] = converted_ts.astype('datetime64[ns, UTC]')
                 ts_min, ts_max = df['timestamp'].min(), df['timestamp'].max()
                 if ts_max < s or ts_min > e:
                     continue

@@ -8,12 +8,9 @@ from pathlib import Path
 
 
 # Ensure local strategy modules and engine src are importable
-SCRIPT_DIR = Path(__file__).resolve().parent
-BACKTEST_ROOT = SCRIPT_DIR
-REPO_ROOT = SCRIPT_DIR.parents[2]
-
-sys.path.append(str(BACKTEST_ROOT))
-sys.path.append(str(REPO_ROOT / "backtester" / "src"))
+sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent))  # For 'from src.*' imports
+sys.path.append(str(Path(__file__).parent.parent / "src"))  # For 'from backtester' import
 
 from backtester import Backtester  # type: ignore  # noqa: E402
 from position_managers.v3_pairs_pm import PositionManager  # type: ignore  # noqa: E402
@@ -29,11 +26,11 @@ logger = logging.getLogger(__name__)
 
 def _resolve_default_paths() -> tuple[Path, Path, Path]:
     """Return paths for JSON configs and historical data directory."""
-
-    hypothesis_dir = REPO_ROOT / "hypothesis_testing" / "cointegration"
+    repo_root = Path(__file__).parent.parent.parent
+    hypothesis_dir = repo_root / "hypothesis_testing" / "cointegration"
     validated_path = hypothesis_dir / "validated_baskets.json"
     optimization_path = hypothesis_dir / "zscore_optimization.json"
-    hist_dir = REPO_ROOT / "hku-data" / "test_data"
+    hist_dir = repo_root / "hku-data" / "test_data"
     return validated_path, optimization_path, hist_dir
 
 
@@ -62,7 +59,6 @@ def main() -> None:
     min_lookback_days = max(max_basket_lookback, 30)
 
     position_manager = PositionManager(
-        portfolio_alloc_frac=0.8,
         risk_method='max_sharpe',
         max_total_allocation=500.0,
         min_lookback_days=min_lookback_days,
@@ -70,8 +66,8 @@ def main() -> None:
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
     # Run over the last ~90 days by default
-    end_date = datetime.now(timezone.utc) - timedelta(days=1)
-    start_date = end_date - timedelta(days=90)
+    end_date = datetime.now(timezone.utc) - timedelta(days=2)
+    start_date = end_date - timedelta(days=2)
 
     logger.info("Running backtest from %s to %s", start_date, end_date)
 
@@ -80,11 +76,24 @@ def main() -> None:
         position_manager=position_manager,
         start_date=start_date,
         end_date=end_date,
-        time_step=timedelta(days=1),
+        time_step=timedelta(minutes=15),
         market_type="futures",
     )
 
     backtester.print_results(results)
+
+
+    backtester.save_results(results, "v3_cointegration_bt")
+
+    # Load and plot regime data for comparison (auto-generates if missing)
+    # This shows HMM volatility regimes (green=low vol, red=high vol) alongside performance
+    if backtester.load_regime_data():
+        backtester.plot_regimes()
+
+    backtester.plot_portfolio_value()
+    backtester.plot_drawdown()
+    backtester.plot_returns()
+    backtester.plot_positions()
 
 
 if __name__ == "__main__":

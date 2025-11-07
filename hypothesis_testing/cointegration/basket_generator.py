@@ -19,24 +19,23 @@ def _generate_combinations_from_cluster(args):
     Designed to be picklable for multiprocessing.
     """
     cluster_symbols, min_basket_size, max_basket_size = args
-    
-    if len(cluster_symbols) < min_basket_size:
+
+    if len(cluster_symbols) < 4:
         return []
-    
+
     baskets = []
-    for r in range(min_basket_size, min(len(cluster_symbols) + 1, max_basket_size + 1)):
+    for r in range(4, min(len(cluster_symbols) + 1, 7)):
         baskets.extend([list(combo) for combo in combinations(cluster_symbols, r)])
-    
+
     return baskets
 
 
-def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5, 
-                                min_basket_size: int = 2, max_basket_size: int = 6,
-                                parallel: bool = True, max_workers: Optional[int] = None,
-                                max_combinations_per_cluster: Optional[int] = 4000) -> List[List[str]]:
+def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
+                                max_workers: Optional[int] = None,
+                                 max_combinations_per_cluster: Optional[int] = 20000) -> List[List[str]]:
     """
-    Generate candidate baskets using hierarchical clustering on correlation matrix.
-    Optionally parallelizes combination generation across clusters.
+    Generate candidate baskets (4-6 symbols each) using hierarchical clustering on correlation matrix.
+    Parallelizes combination generation across clusters.
     
     Parameters:
     -----------
@@ -44,16 +43,10 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
         Price data with columns {symbol}_close
     n_clusters : int
         Number of clusters for hierarchical clustering
-    min_basket_size : int
-        Minimum number of assets in a basket
-    max_basket_size : int
-        Maximum number of assets in a basket
-    parallel : bool
-        Whether to use parallel processing for combination generation
     max_workers : Optional[int]
         Maximum number of worker processes. If None, uses CPU count.
     max_combinations_per_cluster : Optional[int]
-        Maximum combinations to generate per cluster (default: 4000). If None, no limit.
+        Maximum combinations to generate per cluster (default: 20000). If None, no limit.
         Helps prevent combinatorial explosion with large clusters.
         
     Returns:
@@ -83,7 +76,7 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
     # Filter clusters: if a cluster would generate too many combinations, limit its size
     filtered_clusters = []
     for cluster_symbols in cluster_list:
-        if len(cluster_symbols) < min_basket_size:
+        if len(cluster_symbols) < 4:
             continue
         
         # Estimate total combinations (avoid computing all combinations)
@@ -91,7 +84,7 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
         # C(n,r) = n! / (r! * (n-r)!)
         n = len(cluster_symbols)
         total_combos = 0
-        for r in range(min_basket_size, min(n + 1, max_basket_size + 1)):
+        for r in range(4, min(n + 1, 7)):
             # Calculate C(n,r) efficiently
             if n > 50:  # Use approximation for very large n
                 import math
@@ -112,16 +105,16 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
             cluster_cols = [col for col in price_data.columns 
                            if col.replace('_close', '') in cluster_symbols]
             if len(cluster_cols) > 0:
-                cluster_returns = returns[cluster_cols]
+                cluster_returns = log_returns[cluster_cols]
                 cluster_corr = cluster_returns.corr()
                 # Get average correlation for each symbol
                 avg_corr = cluster_corr.mean().sort_values(ascending=False)
                 # Find max symbols that keep us under limit
-                max_symbols = min_basket_size
+                max_symbols = 4
                 import math
-                for n_test in range(min_basket_size, len(cluster_symbols) + 1):
+                for n_test in range(4, len(cluster_symbols) + 1):
                     test_total = 0
-                    for r in range(min_basket_size, min(n_test + 1, max_basket_size + 1)):
+                    for r in range(4, min(n_test + 1, 7)):
                         if hasattr(math, 'comb'):
                             test_total += math.comb(n_test, r)
                         else:
@@ -145,30 +138,25 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
             filtered_clusters.append(cluster_symbols)
     
     # Generate baskets from clusters (parallelized)
-    if parallel and len(filtered_clusters) > 1:
+    args_list = [(cluster_symbols, 4, 6)  # Fixed min/max basket size for this evaluation
+                 for cluster_symbols in filtered_clusters]
 
-        # Prepare arguments
-        args_list = [(cluster_symbols, min_basket_size, max_basket_size) 
-                     for cluster_symbols in filtered_clusters]
-        
-        baskets = []
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            future_to_cluster = {
-                executor.submit(_generate_combinations_from_cluster, args): i
-                for i, args in enumerate(args_list)
-            }
-            
-            for future in as_completed(future_to_cluster):
-                try:
-                    cluster_baskets = future.result()
-                    baskets.extend(cluster_baskets)
-                except Exception as e:
-                    cluster_idx = future_to_cluster[future]
-                    logger.warning(f"Failed to generate baskets from cluster {cluster_idx}: {e}")
-        
-        return baskets
-   
-        
+    baskets = []
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_cluster = {
+            executor.submit(_generate_combinations_from_cluster, args): i
+            for i, args in enumerate(args_list)
+        }
+
+        for future in as_completed(future_to_cluster):
+            try:
+                cluster_baskets = future.result()
+                baskets.extend(cluster_baskets)
+            except Exception as e:
+                cluster_idx = future_to_cluster[future]
+                logger.warning(f"Failed to generate baskets from cluster {cluster_idx}: {e}")
+
+    return baskets
 
 def compute_spread(log_prices: np.ndarray, eigenvector: np.ndarray) -> np.ndarray:
     """

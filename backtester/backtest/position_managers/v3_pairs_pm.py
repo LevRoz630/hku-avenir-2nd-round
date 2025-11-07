@@ -18,11 +18,10 @@ class PositionManager:
     3. Allocates capital to pairs based on risk-adjusted strategy returns
     4. Sizes each pair's legs using beta to ensure net beta neutrality
     5. Rebalances existing positions to optimal allocations
-    6. Caps total allocation at $500 maximum
+    6. Uses fixed max_total_allocation for all pairs
     """
     
     def __init__(self,
-                 portfolio_alloc_frac: float = 0.8,
                  risk_method: str = 'max_sharpe',
                  min_lookback_days: int = 30,
                  rebalance_threshold: float = 0.05,
@@ -30,17 +29,14 @@ class PositionManager:
                  max_total_allocation: float = 500.0):
         """
         Args:
-            portfolio_alloc_frac: Maximum fraction of portfolio to allocate to all pairs (default 0.8 = 80%)
             risk_method: 'min_volatility' or 'max_sharpe'
             min_lookback_days: Days of spread returns needed for risk calculation (default 30)
             rebalance_threshold: Minimum percentage drift before rebalancing (default 0.05 = 5%)
             pairs_config: Optional list of pair configs to build registry. If None, inferred from orders.
-            max_total_allocation: Maximum total capital to allocate across all pairs (default $2000)
-            max_total_positions: Maximum total individual symbol positions held (default 500)
+            max_total_allocation: Maximum total capital to allocate across all pairs (default $500)
         """
         self.oms_client = None
         self.data_manager = None
-        self.portfolio_alloc_frac = portfolio_alloc_frac
         self.risk_method = 'max_sharpe'  # Fixed to Sharpe ratio optimization
         self.min_lookback_days = min_lookback_days
         self.rebalance_threshold = rebalance_threshold
@@ -518,14 +514,8 @@ class PositionManager:
             if total_weight > 0:
                 weights = {k: v / total_weight for k, v in weights.items()}
             
-            # Calculate desired capital based on portfolio value and allocation fraction
-            desired_capital = total_portfolio_value * self.portfolio_alloc_frac
-            
-            # Cap at max_total_allocation
-            total_capital = min(desired_capital, self.max_total_allocation)
-            
-            if desired_capital > self.max_total_allocation:
-                logger.info(f"Capping allocation: desired=${desired_capital:,.2f}, capped=${total_capital:,.2f}")
+            # Use max_total_allocation directly
+            total_capital = self.max_total_allocation
             
             allocations = {pair_id: total_capital * weight 
                           for pair_id, weight in weights.items()}
@@ -542,9 +532,8 @@ class PositionManager:
         if n_pairs == 0:
             return {}
         
-        # Calculate desired capital and cap at max_total_allocation
-        desired_capital = total_portfolio_value * self.portfolio_alloc_frac
-        total_capital = min(desired_capital, self.max_total_allocation)
+        # Use max_total_allocation directly
+        total_capital = self.max_total_allocation
         
         per_pair_capital = total_capital / n_pairs
         

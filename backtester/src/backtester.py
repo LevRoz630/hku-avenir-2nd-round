@@ -13,6 +13,7 @@ import copy
 import inspect
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,12 @@ class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         """High-level backtest runner coordinating data, strategy and OMS.
 
+        Performance Optimizations:
+        - Cached price lookups to avoid repeated disk I/O
+        - Reduced logging frequency (progress every 10% instead of every iteration)
+        - Position exposure snapshots every 10 iterations instead of every timestep
+        - Progress reporting with completion percentage
+
         Responsibilities:
         - Ensure historical data availability and push into the collector cache
         - Iterate the clock, ask strategy for orders, run Position Manager filters
@@ -181,7 +188,73 @@ class Backtester:
 
         # For permutation tests: list of per-run return arrays; index 0 is the observed run
         self.permutation_returns = []
-        
+
+        # Regime data for plotting
+        self.regime_data = None
+
+        # Price cache for performance optimization
+        self.price_cache = {}
+
+    def get_cached_price(self, symbol: str, timestamp: datetime, instrument_type: str = None) -> float:
+        """Get cached price or fetch and cache it."""
+        cache_key = f"{symbol}_{instrument_type}_{timestamp.isoformat()}"
+
+        if cache_key in self.price_cache:
+            return self.price_cache[cache_key]
+
+        # Price not cached, fetch it
+        if not self.oms_client:
+            return None
+
+        # Temporarily set OMS time to get price
+        original_time = self.oms_client.current_time
+        self.oms_client.current_time = timestamp
+        price = self.oms_client.get_current_price(symbol, instrument_type)
+        self.oms_client.current_time = original_time
+
+        # Cache the price
+        if price is not None:
+            self.price_cache[cache_key] = price
+
+        return price
+
+    def _update_portfolio_value_cached(self) -> float:
+        """Update portfolio value using cached prices for better performance."""
+        if not self.oms_client:
+            return 0.0
+
+        total_value = self.oms_client.balance['USDT']
+        current_time = self.oms_client.current_time
+
+        for symbol, pos in self.oms_client.positions.items():
+            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
+            current_price = self.get_cached_price(symbol, current_time, instrument_type)
+            if not current_price:
+                continue
+
+            quantity = float(pos.get('quantity', 0.0))
+            side = pos.get('side', 'LONG')
+            entry = float(pos.get('entry_price', 0.0))
+
+            if instrument_type == 'future':
+                # Unrealized PnL contribution only
+                if abs(quantity) > 0:
+                    if side == 'LONG':
+                        unrealized = quantity * (current_price - entry)
+                    elif side == 'SHORT':
+                        unrealized = quantity * (entry - current_price)
+                    else:
+                        unrealized = 0.0
+                    total_value += unrealized
+                # Maintain notional and latest value fields for reporting
+                pos['value'] = abs(quantity) * current_price
+            else:
+                # Spot: include current market value
+                total_value += abs(quantity) * current_price
+                pos['value'] = abs(quantity) * current_price
+
+        return total_value
+
     def run_backtest(self, 
                         strategy: Any,
                         position_manager: Any,
@@ -284,27 +357,37 @@ class Backtester:
         self.oms_client.set_current_time(strategy.start_time)
         self.oms_client.set_data_manager(self.data_manager)
 
-        # Reset per-run histories
+        # Reset per-run histories and caches
         self.position_exposures_history = []
+        self.price_cache.clear()  # Clear price cache for fresh backtest
 
         # Run backtest
         iteration = 0
+        total_iterations = int((end_date - aligned_start) / time_step) + 1
+        logger.info(f"Starting backtest with ~{total_iterations} iterations")
 
         while self.oms_client.current_time <= end_date:
             try:
-                # Revalue portfolio at the current timestamp
-                total_value = self.oms_client.update_portfolio_value()
+                # Revalue portfolio at the current timestamp (with price caching)
+                total_value = self._update_portfolio_value_cached()
                 self.portfolio_values.append(total_value)
-                logger.info(f"Total Portfolio Value: {total_value}")
-                # Pretty-print balances and positions
-                try:
-                    positions_tbl = format_positions_table(self.oms_client.get_position())
-                    logger.info("\nPositions:\n" + positions_tbl)
 
-                except Exception as _e:
-                    # Fallback to raw summary on any formatting error
-                    summary = self.oms_client.get_position_summary()
-                    logger.info(f"Position Summary: {summary}")
+                # Progress reporting every 10% completion
+                progress_pct = int((iteration / total_iterations) * 100)
+                if progress_pct % 10 == 0 and progress_pct > 0 and iteration % (total_iterations // 10) == 0:
+                    logger.info(f"Progress: {progress_pct}% complete - Portfolio Value: {total_value:.2f}")
+
+                # Detailed logging every 500 iterations for debugging
+                if iteration % 500 == 0:
+                    logger.debug(f"Iteration {iteration}: Portfolio Value: {total_value:.2f}")
+
+                    # Pretty-print balances and positions (less frequently)
+                    try:
+                        positions_tbl = format_positions_table(self.oms_client.get_position())
+                        logger.debug(f"\nPositions:\n{positions_tbl}")
+                    except Exception as _e:
+                        summary = self.oms_client.get_position_summary()
+                        logger.debug(f"Position Summary: {summary}")
 
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
 
@@ -324,25 +407,28 @@ class Backtester:
                             logger.error(f"Error setting target position: {e}")
                             continue
 
-                # Snapshot signed notional exposures for all symbols at this time
-                try:
-                    exposures = {}
-                    for symbol, pos in self.oms_client.positions.items():
-                        instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
-                        current_price = self.oms_client.get_current_price(symbol, instrument_type)
-                        if not current_price:
-                            continue
-                        qty = float(pos.get('quantity', 0.0))
-                        side = pos.get('side', 'LONG')
-                        # signed notional: positive for LONG, negative for SHORT
-                        signed_notional = qty * current_price if side == 'LONG' else -qty * current_price
-                        exposures[symbol] = signed_notional
-                    self.position_exposures_history.append({
-                        'timestamp': pd.Timestamp(self.oms_client.current_time),
-                        'exposures': exposures
-                    })
-                except Exception as e:
-                    logger.debug(f"Error snapshotting exposures: {e}")
+                # Snapshot signed notional exposures less frequently (every 10 iterations)
+                if iteration % 10 == 0:
+                    try:
+                        exposures = {}
+                        current_time = self.oms_client.current_time
+                        for symbol, pos in self.oms_client.positions.items():
+                            instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
+                            # Use cached price for better performance
+                            current_price = self.get_cached_price(symbol, current_time, instrument_type)
+                            if not current_price:
+                                continue
+                            qty = float(pos.get('quantity', 0.0))
+                            side = pos.get('side', 'LONG')
+                            # signed notional: positive for LONG, negative for SHORT
+                            signed_notional = qty * current_price if side == 'LONG' else -qty * current_price
+                            exposures[symbol] = signed_notional
+                        self.position_exposures_history.append({
+                            'timestamp': pd.Timestamp(current_time),
+                            'exposures': exposures
+                        })
+                    except Exception as e:
+                        logger.debug(f"Error snapshotting exposures: {e}")
 
                 # Move to next time step
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
@@ -352,7 +438,9 @@ class Backtester:
                 logger.error(f"Error in backtest iteration {iteration}: {e}")
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 continue
-        
+
+        logger.info("Backtest completed successfully!")
+
         # Calculate final performance metrics
         self.calculate_performance_metrics()
         # Return results
@@ -679,6 +767,134 @@ class Backtester:
             title="Signed Notional Exposures Over Time",
             xaxis_title="Time",
             yaxis_title="Symbol",
+        )
+        fig.show()
+
+    def load_regime_data(self, regime_labels_path: str = None, generate_if_missing: bool = True):
+        """Load HMM regime labels for visualization. Generate if missing."""
+        if regime_labels_path is None:
+            # Default path based on hypothesis testing artifacts
+            repo_root = Path(__file__).parent.parent.parent
+            regime_labels_path = repo_root / "hypothesis_testing" / "cointegration" / "artifacts" / "hmm_labels_15m_mark.parquet"
+
+        try:
+            if regime_labels_path.exists():
+                self.regime_data = pd.read_parquet(regime_labels_path)
+                logger.info(f"Loaded regime data from {regime_labels_path}")
+                return True
+            elif generate_if_missing:
+                logger.info(f"Regime data not found at {regime_labels_path}. Generating...")
+                return self._generate_regime_data(regime_labels_path)
+            else:
+                logger.warning(f"Regime labels file not found at {regime_labels_path}")
+                return False
+        except Exception as e:
+            logger.error(f"Error loading regime data: {e}")
+            return False
+
+    def _generate_regime_data(self, output_path: Path) -> bool:
+        """Generate HMM regime labels from price data."""
+        try:
+            # Add hypothesis testing path for imports
+            sys.path.append(str(Path(__file__).parent.parent.parent / "hypothesis_testing" / "cointegration"))
+
+            # Import required functions
+            from hmm_regimes import train_and_persist_labels
+
+            # Load price data from backtester data directory
+            repo_root = Path(__file__).parent.parent.parent
+            data_dir = repo_root / "hku-data" / "test_data"
+
+            logger.info(f"Loading price data from {data_dir}")
+
+            # Find all mark price files
+            price_files = list(data_dir.glob("perpetual_*_mark_15m_*.parquet"))
+            if not price_files:
+                logger.error("No price data files found")
+                return False
+
+            logger.info(f"Found {len(price_files)} price data files")
+
+            # Load and combine price data
+            price_frames = []
+            for file_path in price_files:
+                try:
+                    df = pd.read_parquet(file_path)
+                    symbol = file_path.name.split('_')[1]  # Extract symbol from filename
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    df = df.set_index('timestamp')
+                    close_col = f"{symbol}_close"
+                    price_series = df[['close']].rename(columns={'close': close_col})
+                    price_frames.append(price_series)
+                except Exception as e:
+                    logger.warning(f"Error loading {file_path}: {e}")
+                    continue
+
+            if not price_frames:
+                logger.error("No valid price data loaded")
+                return False
+
+            # Combine all symbols
+            price_data = pd.concat(price_frames, axis=1, join='outer').dropna(how='all')
+            logger.info(f"Combined data shape: {price_data.shape}")
+
+            # Generate regime labels
+            bars_per_day = 96  # 15m bars * 24 hours
+            meta = {
+                'generated_at': datetime.now().isoformat(),
+                'source': 'backtester_auto_generation',
+                'timeframe': '15m',
+                'price_type': 'mark',
+                'bars_per_day': bars_per_day,
+                'symbols': len([col for col in price_data.columns if col.endswith('_close')])
+            }
+
+            labels_df = train_and_persist_labels(
+                cointegration_data=price_data,
+                bars_per_day=bars_per_day,
+                output_path=output_path,
+                meta=meta
+            )
+
+            # Load the generated data
+            self.regime_data = labels_df
+            logger.info(f"Successfully generated and loaded regime data: {labels_df.shape}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error generating regime data: {e}")
+            return False
+
+    def plot_regimes(self):
+        """Plot HMM regime states over time as a heatmap."""
+        if self.regime_data is None:
+            logger.warning("No regime data loaded. Call load_regime_data() first.")
+            return
+
+        # Get regime columns (ending with _hmm_state)
+        regime_cols = [col for col in self.regime_data.columns if col.endswith('_hmm_state')]
+        if not regime_cols:
+            logger.warning("No HMM state columns found in regime data")
+            return
+
+        # Extract symbol names from column names
+        symbols = [col.replace('_hmm_state', '') for col in regime_cols]
+
+        # Create heatmap
+        colorscale = [[0, 'green'], [1, 'red']]
+        fig = go.Figure(data=go.Heatmap(
+            z=self.regime_data[regime_cols].values.T,
+            x=self.regime_data.index,
+            y=symbols,
+            colorscale=colorscale,
+            zmin=0,
+            zmax=1
+        ))
+
+        fig.update_layout(
+            title="HMM Regimes (Green=Low, Red=High)",
+            xaxis_title="Time",
+            yaxis_title="Symbol"
         )
         fig.show()
 

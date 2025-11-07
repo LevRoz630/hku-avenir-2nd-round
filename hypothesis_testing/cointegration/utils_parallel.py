@@ -2,7 +2,7 @@
 Parallel processing utilities for cointegration testing.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 import numpy as np
 import pandas as pd
 import logging
@@ -21,7 +21,7 @@ def _test_baskets_batch(args):
     Reconstructs DataFrame once per worker, then tests all baskets.
     Designed to be picklable for multiprocessing.
     """
-    price_data_dict, baskets_batch = args
+    price_data_dict, baskets_batch, labels_dict, include_states, policy, k = args
     
     try:
         # Reconstruct price data DataFrame once per worker (not per basket!)
@@ -29,18 +29,47 @@ def _test_baskets_batch(args):
                                   index=pd.DatetimeIndex(price_data_dict['index']),
                                   columns=price_data_dict['columns'])
         
+        # Reconstruct labels DataFrame once per worker if provided
+        labels_df = None
+        if labels_dict is not None:
+            index_values = labels_dict['index']
+            tz = labels_dict.get('tz')
+            index = pd.DatetimeIndex(index_values)
+            if tz is not None and index.tz is None:
+                index = index.tz_localize(tz)
+            labels_df = pd.DataFrame(labels_dict['data'], index=index, columns=labels_dict['columns'])
+
         results = []
         for basket in baskets_batch:
             try:
                 # Extract basket prices
                 basket_cols = [f'{sym}_close' for sym in basket]
-                basket_prices = price_data[basket_cols].values
+                # Optionally filter by regimes (policy='all' MVP)
+                price_df = price_data
+                if labels_df is not None and include_states is not None:
+                    state_cols = [f"{sym}_hmm_state" for sym in basket]
+                    if all(col in labels_df.columns for col in state_cols):
+                        aligned_index = price_df.index.intersection(labels_df.index)
+                        if len(aligned_index) == 0:
+                            continue
+                        states = labels_df.loc[aligned_index, state_cols]
+                        mask = np.ones(len(aligned_index), dtype=bool)
+                        # MVP: only 'all'
+                        for col in state_cols:
+                            mask &= states[col].isin(include_states).values
+                        filtered_index = aligned_index[mask]
+                        # Require sufficient observations after filtering
+                        if len(filtered_index) < len(basket) * 10:
+                            continue
+                        price_df = price_df.loc[filtered_index]
+
+                basket_prices = price_df[basket_cols].values
                 
                 # Convert to log prices
                 log_prices = np.log(basket_prices)
                 
                 # Run Johansen test
-                result = johansen_test(log_prices)
+                result = johansen_test(log_prices, p_value_threshold=0.05)
                 
                 if not result['is_cointegrated']:
                     continue
@@ -75,8 +104,13 @@ def _test_baskets_batch(args):
         return []
 
 
-def test_baskets_cointegration_parallel(price_data: pd.DataFrame, 
-                                        candidate_baskets: List[List[str]], 
+def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
+                                        candidate_baskets: List[List[str]],
+                                        *,
+                                        regime_labels: Optional[pd.DataFrame] = None,
+                                        include_states: Optional[Set[int]] = None,
+                                        policy: str = 'all',
+                                        k: Optional[int] = None,
                                         max_workers: Optional[int] = None,
                                         batch_size: int = 100,
                                         deduplicate: bool = True,
@@ -121,14 +155,24 @@ def test_baskets_cointegration_parallel(price_data: pd.DataFrame,
         'index': price_data.index.values,
         'columns': price_data.columns.tolist()
     }
+
+    labels_dict = None
+    if regime_labels is not None:
+        index_values = regime_labels.index.view('int64')
+        labels_dict = {
+            'data': regime_labels.values,
+            'index': index_values,
+            'tz': getattr(regime_labels.index, 'tz', None),
+            'columns': regime_labels.columns.tolist()
+        }
     
     # Batch baskets to reduce DataFrame reconstruction overhead
     batches = []
     for i in range(0, len(candidate_baskets), batch_size):
         batches.append(candidate_baskets[i:i + batch_size])
     
-    # Prepare arguments (price_data_dict, baskets_batch)
-    args_list = [(price_data_dict, batch) for batch in batches]
+    # Prepare arguments (price_data_dict, baskets_batch, labels_dict, include_states, policy, k)
+    args_list = [(price_data_dict, batch, labels_dict, include_states, policy, k) for batch in batches]
     
     cointegrated_baskets = []
     

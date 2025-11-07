@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional, Set
 from itertools import product
 
 # Find workspace root
@@ -155,6 +155,10 @@ def simulate_trades(spread: np.ndarray,
 
 def optimize_zscore_params(basket_data: Dict,
                             test_data: pd.DataFrame,
+                            *,
+                            regime_labels: Optional[pd.DataFrame] = None,
+                            include_states: Optional[Set[int]] = None,
+                            policy: str = 'all',
                             entry_thresholds: List[float] = [1.0, 1.5, 2.0, 2.5, 3.0],
                             exit_thresholds: List[float] = [0.0, 0.5, 1.0],
                             lookback_days: List[int] = [7, 14, 21, 30, 45, 60],
@@ -176,12 +180,31 @@ def optimize_zscore_params(basket_data: Dict,
     basket = basket_data['basket']
     eigenvector = np.array(basket_data['eigenvector'])
     
+    # Optional regime masking (MVP: policy='all')
+    filtered_data = test_data
+    coverage_ratio = 1.0
+    if regime_labels is not None and include_states is not None:
+        state_cols = [f"{sym}_hmm_state" for sym in basket]
+        if all(col in regime_labels.columns for col in state_cols):
+            idx = filtered_data.index.intersection(regime_labels.index)
+            if len(idx) == 0:
+                return {'error': 'No overlap between labels and test_data'}
+            states = regime_labels.loc[idx, state_cols]
+            mask = np.ones(len(idx), dtype=bool)
+            for col in state_cols:
+                mask &= states[col].isin(include_states).values
+            idx_filtered = idx[mask]
+            if len(idx_filtered) < len(basket) * 10:
+                return {'error': 'Insufficient data after regime mask'}
+            filtered_data = filtered_data.loc[idx_filtered]
+            coverage_ratio = len(idx_filtered) / len(idx)
+
     # Extract basket prices and compute spread
     basket_cols = [f'{sym}_close' for sym in basket]
-    if not all(col in test_data.columns for col in basket_cols):
+    if not all(col in filtered_data.columns for col in basket_cols):
         return {'error': 'Missing columns'}
     
-    basket_prices = test_data[basket_cols].values
+    basket_prices = filtered_data[basket_cols].values
     
     # Validate prices
     if np.any(basket_prices <= 0):
@@ -254,7 +277,8 @@ def optimize_zscore_params(basket_data: Dict,
         'optimal_params': best,
         'all_results': sorted(results, key=lambda x: x['sharpe_ratio'], reverse=True),
         'total_combinations_tested': len(results),
-        'min_trades_filter': min_trades
+        'min_trades_filter': min_trades,
+        'coverage_ratio': float(coverage_ratio)
     }
 
 
