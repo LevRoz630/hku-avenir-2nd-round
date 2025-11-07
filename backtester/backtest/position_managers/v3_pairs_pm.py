@@ -11,31 +11,34 @@ logger = logging.getLogger(__name__)
 class PositionManager:
     """
     Pair-level position manager for pairs trading with rebalancing.
-    
+
     Manages risk at the pair level, not individual symbols:
     1. Groups orders by pair_id
-    2. Uses pyportfolioopt for portfolio-level risk management 
+    2. Uses pyportfolioopt for portfolio-level risk management
     3. Allocates capital to pairs based on risk parity/min vol/max sharpe
     4. Sizes each pair's legs using beta to ensure net beta neutrality
     5. Rebalances existing positions to optimal allocations
     6. Caps total allocation at $2000 maximum
+    7. Caps total individual positions at 500 maximum
     """
     
-    def __init__(self, 
+    def __init__(self,
                  portfolio_alloc_frac: float = 0.8,
                  risk_method: str = 'min_volatility',
-                 min_lookback_days: int = 90,
+                 min_lookback_days: int = 30,
                  rebalance_threshold: float = 0.05,
                  pairs_config: Optional[List[Dict[str, Any]]] = None,
-                 max_total_allocation: float = 2000.0):
+                 max_total_allocation: float = 2000.0,
+                 max_total_positions: int = 500):
         """
         Args:
             portfolio_alloc_frac: Maximum fraction of portfolio to allocate to all pairs (default 0.8 = 80%)
             risk_method: 'min_volatility' or 'max_sharpe'
-            min_lookback_days: Minimum days of spread returns needed for risk calculation
+            min_lookback_days: Days of spread returns needed for risk calculation (default 30)
             rebalance_threshold: Minimum percentage drift before rebalancing (default 0.05 = 5%)
             pairs_config: Optional list of pair configs to build registry. If None, inferred from orders.
             max_total_allocation: Maximum total capital to allocate across all pairs (default $2000)
+            max_total_positions: Maximum total individual symbol positions held (default 500)
         """
         self.oms_client = None
         self.data_manager = None
@@ -44,6 +47,7 @@ class PositionManager:
         self.min_lookback_days = min_lookback_days
         self.rebalance_threshold = rebalance_threshold
         self.max_total_allocation = max_total_allocation
+        self.max_total_positions = max_total_positions
         self.pair_spread_history = {}  # Track spread returns for each pair
         
         # Pair registry: {pair_id: {'a_symbol': str, 'b_symbol': str, 'a_base': str, 'b_base': str}}
@@ -198,7 +202,76 @@ class PositionManager:
             # 12. Size new orders using optimal allocations
             final_new_pairs_dict = self._group_orders_by_pair(final_new_orders)
             sized_new_orders = self._size_orders(final_new_pairs_dict, optimal_allocations)
-            
+
+            # 12a. Enforce position cap: Only accept complete baskets
+            current_position_count = self._count_current_positions()
+
+            existing_symbols = set()
+            positions_list = self.oms_client.get_position() or []
+            for pos in positions_list:
+                symbol = pos.get('instrument_name') or pos.get('symbol')
+                try:
+                    qty = float(pos.get('quantity', 0))
+                    if abs(qty) > 0 and symbol:
+                        existing_symbols.add(symbol)
+                except (TypeError, ValueError):
+                    continue
+
+            baskets_by_id = {}
+            for order in sized_new_orders:
+                pair_id = order.get('pair_id')
+                if not pair_id:
+                    continue
+                if pair_id not in baskets_by_id:
+                    baskets_by_id[pair_id] = []
+                baskets_by_id[pair_id].append(order)
+
+            filtered_sized_orders = []
+            for pair_id, basket_orders in baskets_by_id.items():
+                basket_new_symbols = set()
+                for order in basket_orders:
+                    symbol = order.get('instrument_name') or order.get('symbol')
+                    if symbol and symbol not in existing_symbols:
+                        basket_new_symbols.add(symbol)
+
+                positions_after_basket = current_position_count + len(basket_new_symbols)
+
+                if positions_after_basket <= self.max_total_positions:
+                    filtered_sized_orders.extend(basket_orders)
+                    current_position_count = positions_after_basket
+                    existing_symbols.update(basket_new_symbols)
+                    logger.info(f"  Basket {pair_id}: ACCEPTED ({len(basket_new_symbols)} new positions)")
+                else:
+                    logger.warning(f"  Basket {pair_id}: REJECTED (would exceed cap: {positions_after_basket} > {self.max_total_positions})")
+
+            sized_new_orders = filtered_sized_orders
+
+            initial_existing_symbols = set()
+            positions_list = self.oms_client.get_position() or []
+            for pos in positions_list:
+                symbol = pos.get('instrument_name') or pos.get('symbol')
+                try:
+                    qty = float(pos.get('quantity', 0))
+                    if abs(qty) > 0 and symbol:
+                        initial_existing_symbols.add(symbol)
+                except (TypeError, ValueError):
+                    continue
+
+            final_new_symbols = set()
+            for order in sized_new_orders:
+                symbol = order.get('instrument_name') or order.get('symbol')
+                if symbol and symbol not in initial_existing_symbols:
+                    final_new_symbols.add(symbol)
+
+            total_after_new = self._count_current_positions() + len(final_new_symbols)
+
+            logger.info(f"\nPOSITION CAP CHECK:")
+            logger.info(f"  Current positions: {self._count_current_positions()}")
+            logger.info(f"  New positions to add: {len(final_new_symbols)}")
+            logger.info(f"  Total after new orders: {total_after_new} / {self.max_total_positions}")
+            if total_after_new == self.max_total_positions:
+                logger.info(f"  Position cap reached: {total_after_new} positions")
+
             logger.info(f"\nNEW TRADES:")
             if sized_new_orders:
                 logger.info(f"  Generating {len(sized_new_orders)} new trade orders")
@@ -206,7 +279,7 @@ class PositionManager:
                     logger.info(f"    {order.get('side')} {order.get('symbol')} - ${order.get('value', 0):,.2f}")
             else:
                 logger.info("  No new trades")
-            
+
             # 13. Update state tracking
             self._update_pair_state(all_pairs_dict, optimal_allocations)
             
@@ -538,20 +611,12 @@ class PositionManager:
                 logger.warning(f"Pair {pair_id} has invalid total ratio: {total_ratio}")
                 continue
             
-            # Size each leg proportionally to its ratio
             for order in open_orders:
                 ratio = order.get('ratio', 0)
                 if ratio <= 0:
                     continue
-                
                 value = pair_capital * (ratio / total_ratio)
-                sized_order = {**order, 'value': value}
-                sized_orders.append(sized_order)
-            
-            # Log sizing info
-            beta = max(ratios)  # The larger ratio is beta
-            logger.debug(f"Pair {pair_id}: allocated {pair_capital:.2f} USDT, "
-                        f"ratios={ratios}, beta={beta:.3f}")
+                sized_orders.append({**order, 'value': value})
         
         return sized_orders
     

@@ -57,10 +57,15 @@ def main() -> None:
         timeframe="15m",
     )
 
+    # Get max lookback_days from strategy (baskets have lookback_days of 30-45)
+    max_basket_lookback = strategy.lookback_days if strategy else 30
+    min_lookback_days = max(max_basket_lookback, 30)
+
     position_manager = PositionManager(
         portfolio_alloc_frac=0.8,
         risk_method='min_volatility',
         max_total_allocation=2000.0,
+        min_lookback_days=min_lookback_days,
     )
     backtester = Backtester(historical_data_dir=str(hist_dir))
 
