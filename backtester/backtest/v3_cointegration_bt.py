@@ -63,8 +63,8 @@ def main() -> None:
 
     position_manager = PositionManager(
         portfolio_alloc_frac=0.8,
-        risk_method='min_volatility',
-        max_total_allocation=2000.0,
+        risk_method='max_sharpe',
+        max_total_allocation=500.0,
         min_lookback_days=min_lookback_days,
     )
     backtester = Backtester(historical_data_dir=str(hist_dir))
