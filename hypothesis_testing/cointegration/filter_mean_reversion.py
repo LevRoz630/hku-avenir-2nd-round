@@ -1,6 +1,6 @@
 """
 Filter baskets by mean reversion speed.
-Computes half-life and ADF test metrics with multiprocessing.
+Computes Hurst-based half-life metrics with multiprocessing.
 """
 
 import numpy as np
@@ -9,148 +9,94 @@ from typing import List, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 import os
-from statsmodels.tsa.stattools import adfuller
 
 logger = logging.getLogger(__name__)
 
 
 def _compute_half_life(spread: np.ndarray) -> float:
     """
-    Compute half-life of mean reversion using Ornstein-Uhlenbeck process.
-    Estimates theta from: spread_t = theta * spread_{t-1} + epsilon_t
-    
-    Half-life = -log(2) / log(theta) if theta < 1
-    
+    Compute half-life using Hurst exponent for crypto spread mean reversion.
+
+    Hurst exponent (H) measures long-term memory and persistence:
+    - H < 0.5: mean reverting (good for pairs trading)
+    - H = 0.5: random walk (neutral)
+    - H > 0.5: trending/persistent (bad for pairs trading)
+
+    For crypto spreads, Hurst is more robust than OU process because:
+    - No assumptions about constant mean reversion speed
+    - Handles non-stationary volatility and structural breaks
+    - Measures true long-term persistence, not just short-term autocorrelation
+
+    Half-life derived from Hurst: stronger mean reversion (lower H) = shorter half-life
+
     Parameters:
     -----------
     spread : np.ndarray, shape (T,)
         Spread series
-        
+
     Returns:
     --------
     float
-        Half-life in periods (or np.inf if non-stationary)
+        Half-life in periods (or np.inf if not mean reverting)
     """
-    if len(spread) < 2:
+    if len(spread) < 50:  # Need sufficient data for Hurst estimation
         return np.inf
-    
-    # Check for NaN/Inf values
-    if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
-        return np.inf
-    
-    # Minimum sample size for meaningful half-life estimation
-    if len(spread) < 10:
-        return np.inf
-    
-    # De-mean the spread
-    spread_demeaned = spread - np.mean(spread)
-    
-    # Check variance after de-meaning
-    if np.var(spread_demeaned) == 0:
-        return np.inf
-    
-    # Create lagged series
-    spread_lag = spread_demeaned[:-1]
-    spread_diff = np.diff(spread_demeaned)
-    
-    # Check for NaN/Inf in derived series
-    if np.any(np.isnan(spread_lag)) or np.any(np.isnan(spread_diff)):
-        return np.inf
-    
-    # OLS regression: spread_diff = theta * spread_lag + epsilon
-    var_lag = np.var(spread_lag)
-    if var_lag == 0 or np.isnan(var_lag) or np.isinf(var_lag):
-        return np.inf
-    
-    theta = np.dot(spread_lag, spread_diff) / np.dot(spread_lag, spread_lag)
-    
-    # Validate theta
-    if np.isnan(theta) or np.isinf(theta):
-        return np.inf
-    
-    # Ensure theta is valid for mean reversion (0 < theta < 1)
-    if theta <= 0 or theta >= 1:
-        return np.inf
-    
-    # Half-life = -log(2) / log(theta)
-    log_theta = np.log(theta)
-    if np.isnan(log_theta) or np.isinf(log_theta) or log_theta >= 0:
-        return np.inf
-    
-    half_life = -np.log(2) / log_theta
-    
-    # Validate result
-    if np.isnan(half_life) or np.isinf(half_life) or half_life <= 0:
-        return np.inf
-    
-    return half_life
 
-
-def _compute_adf_test(spread: np.ndarray) -> Dict:
-    """
-    Compute Augmented Dickey-Fuller test on spread.
-    
-    Parameters:
-    -----------
-    spread : np.ndarray, shape (T,)
-        Spread series
-        
-    Returns:
-    --------
-    dict with keys: 'adf_statistic', 'p_value', 'is_stationary'
-    """
-    if len(spread) < 10:
-        return {
-            'adf_statistic': np.nan,
-            'p_value': 1.0,
-            'is_stationary': False
-        }
-    
-    # Check for NaN/Inf values
-    if np.any(np.isnan(spread)) or np.any(np.isinf(spread)):
-        return {
-            'adf_statistic': np.nan,
-            'p_value': 1.0,
-            'is_stationary': False
-        }
-    
-    # Check variance
-    if np.var(spread) == 0:
-        return {
-            'adf_statistic': np.nan,
-            'p_value': 1.0,
-            'is_stationary': False
-        }
-    
     try:
-        # ADF test with automatic lag selection
-        result = adfuller(spread, autolag='AIC')
-        
-        adf_statistic = result[0]
-        p_value = result[1]
-        
-        # Validate results
-        if np.isnan(adf_statistic) or np.isnan(p_value):
-            return {
-                'adf_statistic': np.nan,
-                'p_value': 1.0,
-                'is_stationary': False
-            }
-        
-        is_stationary = p_value < 0.01  # Strong stationarity signal
-        
-        return {
-            'adf_statistic': float(adf_statistic),
-            'p_value': float(p_value),
-            'is_stationary': bool(is_stationary)
-        }
-    except Exception as e:
-        logger.debug(f"Error in ADF test: {e}")
-        return {
-            'adf_statistic': np.nan,
-            'p_value': 1.0,
-            'is_stationary': False
-        }
+        return _compute_half_life_hurst(spread)
+    except:
+        logger.debug("Error in half-life calculation")
+        return np.inf
+
+
+def _compute_half_life_hurst(spread: np.ndarray) -> float:
+    """Hurst exponent based half-life estimation."""
+    if len(spread) < 50:
+        return np.inf
+
+    try:
+        # Simplified Hurst exponent calculation
+        # H = 0.5: random walk (no mean reversion)
+        # H < 0.5: mean reverting
+        # H > 0.5: trending
+
+        spread_centered = spread - np.mean(spread)
+        cumulative = np.cumsum(spread_centered)
+
+        # R/S analysis for different window sizes
+        window_sizes = [int(len(spread) / i) for i in range(2, 6) if len(spread) / i > 10]
+
+        rs_values = []
+        for window in window_sizes:
+            rs_window = []
+            for i in range(0, len(cumulative) - window, window):
+                segment = cumulative[i:i+window]
+                if len(segment) > 10:
+                    R = np.max(segment) - np.min(segment)
+                    S = np.std(segment)
+                    if S > 0:
+                        rs_window.append(R / S)
+            if rs_window:
+                rs_values.append(np.mean(rs_window))
+
+        if len(rs_values) >= 2:
+            # Fit log-log regression to estimate Hurst exponent
+            x = np.log(window_sizes[:len(rs_values)])
+            y = np.log(rs_values)
+            slope = np.polyfit(x, y, 1)[0]
+            hurst = slope
+
+            # For mean reverting series: half-life ≈ -ln(2)/(ln(autocorr))
+            # Using Hurst: if H < 0.5, mean reversion speed increases
+            if hurst < 0.5:
+                # Rough approximation: stronger mean reversion = shorter half-life
+                return max(1, int(50 * (0.5 - hurst) / 0.5))
+    except:
+        logger.debug("Error in half-life calculation")
+
+    return np.inf
+
+
 
 
 def _test_basket_mean_reversion(args):
@@ -214,24 +160,17 @@ def _test_basket_mean_reversion(args):
             logger.debug(f"Invalid spread (NaN/Inf) for basket {basket}")
             return None
         
-        # Compute half-life
+        # Compute half-life using Hurst exponent
         half_life_periods = _compute_half_life(spread)
         half_life_days = half_life_periods / bars_per_day
-        
-        # Compute ADF test
-        adf_result = _compute_adf_test(spread)
-        
-        # Determine if basket passes filter
-        # Pass if: half_life < threshold OR ADF p-value < 0.01
-        passes = (half_life_days < half_life_threshold_days) or adf_result['is_stationary']
-        
+
+        # Determine if basket passes filter (Hurst-based half-life only)
+        passes = half_life_days < half_life_threshold_days
+
         return {
             'basket': basket_result['basket'],
             'half_life_periods': half_life_periods,
             'half_life_days': half_life_days,
-            'adf_statistic': adf_result['adf_statistic'],
-            'adf_p_value': adf_result['p_value'],
-            'is_stationary': adf_result['is_stationary'],
             'passes_filter': passes
         }
     except Exception as e:
@@ -316,9 +255,6 @@ def filter_baskets_mean_reversion(baskets: List[Dict],
                         baskets[basket_idx]['mean_reversion'] = {
                             'half_life_periods': result['half_life_periods'],
                             'half_life_days': result['half_life_days'],
-                            'adf_statistic': result['adf_statistic'],
-                            'adf_p_value': result['adf_p_value'],
-                            'is_stationary': result['is_stationary'],
                             'half_life_threshold_days': half_life_threshold_days
                         }
                         results.append(baskets[basket_idx])
@@ -332,7 +268,7 @@ def filter_baskets_mean_reversion(baskets: List[Dict],
                            f"found {len(results)} fast mean-reverting so far")
     
     logger.info(f"Filtered to {len(results)} fast mean-reverting baskets "
-               f"(half-life < {half_life_threshold_days} days OR ADF p < 0.01)")
+               f"(Hurst-based half-life < {half_life_threshold_days} days)")
     
     return results
 

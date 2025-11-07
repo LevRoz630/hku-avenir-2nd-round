@@ -61,9 +61,10 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
     List[List[str]]
         List of candidate baskets, each basket is a list of symbol names
     """
-    # Compute correlation matrix of returns
-    returns = price_data.pct_change().dropna()
-    corr_matrix = returns.corr().values
+    # Compute correlation matrix of log returns (more appropriate for multiplicative processes)
+    # Log returns are statistically sound for financial time series that are multiplicative
+    log_returns = np.log(price_data / price_data.shift(1)).dropna()
+    corr_matrix = log_returns.corr().values
     
     # Use clustering to find groups
     clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='average')
@@ -121,17 +122,12 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
                 for n_test in range(min_basket_size, len(cluster_symbols) + 1):
                     test_total = 0
                     for r in range(min_basket_size, min(n_test + 1, max_basket_size + 1)):
-                        if n_test > 50:
-                            # Approximation
-                            test_total += int(n_test ** r / math.factorial(r))
+                        if hasattr(math, 'comb'):
+                            test_total += math.comb(n_test, r)
                         else:
-                            # Exact
-                            if hasattr(math, 'comb'):
-                                test_total += math.comb(n_test, r)
-                            else:
-                                test_total += int(math.factorial(n_test) / 
-                                                (math.factorial(r) * math.factorial(n_test - r)))
-                    
+                            test_total += int(math.factorial(n_test) /
+                                            (math.factorial(r) * math.factorial(n_test - r)))
+
                     if test_total <= max_combinations_per_cluster:
                         max_symbols = n_test
                     else:
@@ -192,159 +188,3 @@ def compute_spread(log_prices: np.ndarray, eigenvector: np.ndarray) -> np.ndarra
         Spread series
     """
     return log_prices @ eigenvector
-
-
-def analyze_cluster_quality(price_data: pd.DataFrame,
-                           min_clusters: int = 2,
-                           max_clusters: int = 15,
-                           min_basket_size: int = 2,
-                           max_basket_size: int = 6,
-                           max_combinations_per_cluster: int = 4000) -> Dict:
-    """
-    Analyze cluster quality across different numbers of clusters to find optimal count.
-    
-    What cluster count impacts:
-    - Too few clusters (e.g., 2-3): Large clusters → many combinations → combinatorial explosion
-    - Too many clusters (e.g., 15+): Small clusters → few combinations → may miss good baskets
-    - Optimal: Balanced cluster sizes that generate reasonable number of baskets
-    
-    Parameters:
-    -----------
-    price_data : pd.DataFrame
-        Price data with columns {symbol}_close
-    min_clusters : int
-        Minimum number of clusters to test
-    max_clusters : int
-        Maximum number of clusters to test
-    min_basket_size : int
-        Minimum basket size for combination counting
-    max_basket_size : int
-        Maximum basket size for combination counting
-    max_combinations_per_cluster : int
-        Maximum combinations per cluster threshold
-        
-    Returns:
-    --------
-    dict with keys:
-        - 'n_clusters': List of tested cluster counts
-        - 'total_baskets': List of total baskets generated for each count
-        - 'cluster_sizes': List of cluster size distributions
-        - 'clusters_limited': List of how many clusters hit the limit
-        - 'recommended_n_clusters': Recommended optimal cluster count
-    """
-    returns = price_data.pct_change().dropna()
-    corr_matrix = returns.corr().values
-    n_symbols = len(price_data.columns)
-    
-    results = {
-        'n_clusters': [],
-        'total_baskets': [],
-        'cluster_sizes': [],
-        'clusters_limited': [],
-        'avg_cluster_size': [],
-        'max_cluster_size': []
-    }
-    
-    import math
-    
-    for n_clusters in range(min_clusters, max_clusters + 1):
-        clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='average')
-        labels = clustering.fit_predict(corr_matrix)
-        
-        # Group symbols by cluster
-        clusters = {}
-        for i, symbol in enumerate(price_data.columns):
-            cluster_id = labels[i]
-            if cluster_id not in clusters:
-                clusters[cluster_id] = []
-            clusters[cluster_id].append(symbol)
-        
-        cluster_list = list(clusters.values())
-        cluster_sizes = [len(cluster) for cluster in cluster_list]
-        cluster_sizes.sort(reverse=True)
-        
-        # Estimate total baskets using SAME logic as generate_baskets_clustering
-        total_baskets = 0
-        clusters_limited = 0
-        
-        for cluster_symbols in cluster_list:
-            cluster_size = len(cluster_symbols)
-            if cluster_size < min_basket_size:
-                continue
-            
-            # Estimate total combinations (same as generate_baskets_clustering)
-            n = cluster_size
-            total_combos = 0
-            for r in range(min_basket_size, min(n + 1, max_basket_size + 1)):
-                if n > 50:
-                    total_combos += int(n ** r / math.factorial(r))
-                else:
-                    if hasattr(math, 'comb'):
-                        total_combos += math.comb(n, r)
-                    else:
-                        total_combos += int(math.factorial(n) / 
-                                          (math.factorial(r) * math.factorial(n - r)))
-            
-            # Apply same limiting logic as generate_baskets_clustering
-            if max_combinations_per_cluster and total_combos > max_combinations_per_cluster:
-                clusters_limited += 1
-                # Find max symbols that keep us under limit (same logic)
-                max_symbols = min_basket_size
-                for n_test in range(min_basket_size, cluster_size + 1):
-                    test_total = 0
-                    for r in range(min_basket_size, min(n_test + 1, max_basket_size + 1)):
-                        if n_test > 50:
-                            test_total += int(n_test ** r / math.factorial(r))
-                        else:
-                            if hasattr(math, 'comb'):
-                                test_total += math.comb(n_test, r)
-                            else:
-                                test_total += int(math.factorial(n_test) / 
-                                                (math.factorial(r) * math.factorial(n_test - r)))
-                    if test_total <= max_combinations_per_cluster:
-                        max_symbols = n_test
-                    else:
-                        break
-                
-                # Count combinations from limited size
-                cluster_combos = 0
-                for r in range(min_basket_size, min(max_symbols + 1, max_basket_size + 1)):
-                    if max_symbols > 50:
-                        cluster_combos += int(max_symbols ** r / math.factorial(r))
-                    else:
-                        if hasattr(math, 'comb'):
-                            cluster_combos += math.comb(max_symbols, r)
-                        else:
-                            cluster_combos += int(math.factorial(max_symbols) / 
-                                                (math.factorial(r) * math.factorial(max_symbols - r)))
-            else:
-                # No limiting needed, use original count
-                cluster_combos = total_combos
-            
-            total_baskets += cluster_combos
-        
-        results['n_clusters'].append(n_clusters)
-        results['total_baskets'].append(total_baskets)
-        results['cluster_sizes'].append(cluster_sizes)
-        results['clusters_limited'].append(clusters_limited)
-        results['avg_cluster_size'].append(np.mean(cluster_sizes) if cluster_sizes else 0)
-        results['max_cluster_size'].append(max(cluster_sizes) if cluster_sizes else 0)
-    
-    # Recommend optimal: balance between total baskets and clusters hitting limit
-    # Prefer: high total baskets, low clusters_limited, reasonable cluster sizes
-    if results['total_baskets']:
-        # Score: total_baskets / (1 + clusters_limited) - penalize limited clusters
-        scores = [
-            baskets / (1 + limited) 
-            for baskets, limited in zip(results['total_baskets'], results['clusters_limited'])
-        ]
-        best_idx = np.argmax(scores)
-        results['recommended_n_clusters'] = results['n_clusters'][best_idx]
-        results['recommendation_score'] = scores[best_idx]
-    else:
-        results['recommended_n_clusters'] = min_clusters
-        results['recommendation_score'] = 0
-    
-    return results
-
-

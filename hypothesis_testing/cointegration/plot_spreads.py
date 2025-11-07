@@ -165,8 +165,8 @@ def main():
     splits = split_data_chronologically(
         price_data,
         cluster_split=(1.2, 0.8),
-        cointegration_split=(0.8, 0.4),
-        test_split=(0.4, 0.0)
+        cointegration_split=(0.8, 0.2),
+        test_split=(0.2, 0.0)
     )
     test_data = splits['test_data']
     print(f"Test data: {len(test_data)} samples from {test_data.index.min()} to {test_data.index.max()}\n")

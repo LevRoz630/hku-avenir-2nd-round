@@ -45,10 +45,15 @@ def _test_baskets_batch(args):
                 if not result['is_cointegrated']:
                     continue
                 
-                # Compute spread using first eigenvector (normalized)
+                # Compute spread using first eigenvector
                 eigenvector = result['eigenvectors'][:, 0]
-                # Normalize so first element is 1 (standard normalization)
-                eigenvector = eigenvector / eigenvector[0]
+                # Normalize by sum of absolute values (consistent with strategy/position manager)
+                # This ensures eigenvector weights sum to 1 in absolute terms
+                sum_abs = np.sum(np.abs(eigenvector))
+                if sum_abs > 0:
+                    eigenvector = eigenvector / sum_abs
+                else:
+                    continue  # Skip if eigenvector is invalid
                 
                 spread = compute_spread(log_prices, eigenvector)
                 

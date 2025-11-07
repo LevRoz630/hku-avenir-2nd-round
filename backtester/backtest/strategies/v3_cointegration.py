@@ -168,7 +168,7 @@ class V3CointegrationStrategy:
 
         window = spread.iloc[-lookback_bars:]
         mean = window.mean()
-        std = window.std(ddof=0)
+        std = window.std(ddof=1)
         if std is None or std <= 0:
             return None
 

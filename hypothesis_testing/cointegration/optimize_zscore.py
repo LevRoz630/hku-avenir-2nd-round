@@ -297,8 +297,8 @@ def main():
     splits = split_data_chronologically(
         price_data,
         cluster_split=(1.2, 0.8),
-        cointegration_split=(0.8, 0.4),
-        test_split=(0.4, 0.0)
+        cointegration_split=(0.8, 0.2),
+        test_split=(0.2, 0.0)
     )
     test_data = splits['test_data']
     bars_per_day = 96 if config['timeframe'] == '15m' else 24
