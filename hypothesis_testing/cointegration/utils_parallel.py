@@ -64,18 +64,24 @@ def _test_baskets_batch(args):
                         price_df = price_df.loc[filtered_index]
 
                 basket_prices = price_df[basket_cols].values
-                
+
+                # Check for valid data
+                if np.any(basket_prices <= 0) or np.any(np.isnan(basket_prices)) or np.any(np.isinf(basket_prices)):
+                    continue
+                if basket_prices.shape[0] < len(basket) * 10:
+                    continue
+
                 # Convert to log prices
                 log_prices = np.log(basket_prices)
-                
+
                 # Run Johansen test
                 result = johansen_test(log_prices, p_value_threshold=0.05)
-                
+
                 if not result['is_cointegrated']:
                     continue
-                
+
                 # Compute spread using first eigenvector
-                eigenvector = result['eigenvectors'][:, 0]
+                eigenvector = np.array(result['eigenvectors'])[:, 0]
                 # Normalize by sum of absolute values (consistent with strategy/position manager)
                 # This ensures eigenvector weights sum to 1 in absolute terms
                 sum_abs = np.sum(np.abs(eigenvector))
@@ -83,9 +89,9 @@ def _test_baskets_batch(args):
                     eigenvector = eigenvector / sum_abs
                 else:
                     continue  # Skip if eigenvector is invalid
-                
+
                 spread = compute_spread(log_prices, eigenvector)
-                
+
                 results.append({
                     'basket': basket,
                     'johansen_result': result,

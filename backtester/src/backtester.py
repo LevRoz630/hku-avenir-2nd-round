@@ -309,10 +309,10 @@ class Backtester:
                 if market_type == "spot":
                     self.data_manager.load_data_period(sym, desired_timeframe, 'ohlcv_spot', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
                 elif market_type == "futures":
-                    # this is data for the backtest loop 
+                    # this is data for the backtest loop
                     self.data_manager.load_data_period(sym, desired_timeframe, 'index_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
 
-                    # this is data for price taking estiamtions when the position is opened  and risk management 
+                    # this is data for price taking estiamtions when the position is opened  and risk management
                     self.data_manager.load_data_period(sym, "15m", 'mark_ohlcv_futures', data_start_date, end_date, save_to_class=True, load_from_class=False, export=True)
                 else:
                         raise ValueError(f"Invalid market type: {market_type}")

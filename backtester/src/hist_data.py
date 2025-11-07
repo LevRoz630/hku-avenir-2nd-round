@@ -361,7 +361,7 @@ class HistoricalDataCollector:
                 raise ValueError(f"Invalid kind: {kind}")
             
             if df is None:
-                raise Exception(f"No data for {symbol} {kind} found in class structure")
+                logger.debug(f"No data for {base_symbol} {kind} found in class structure. Available keys: {list(eval(f'self.{kind}_data.keys()')) if hasattr(self, f'{kind}_data') else 'N/A'}")
                 return None
 
 

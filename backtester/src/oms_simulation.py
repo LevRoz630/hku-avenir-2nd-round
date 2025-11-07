@@ -184,10 +184,6 @@ class OMSClient:
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
     def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
-        """
-        Get current price using preloaded data for efficiency.
-        Falls back to loading if data not available.
-        """
         if not self.data_manager or not self.current_time:
             return None
 
@@ -198,17 +194,6 @@ class OMSClient:
             base_symbol = self._normalize_symbol(symbol, instrument_type)
             data_type = "ohlcv_spot" if instrument_type == 'spot' else "mark_ohlcv_futures"
 
-            # Try to get from preloaded data first (much faster)
-            df = self._get_preloaded_price_data(base_symbol, data_type)
-            if df is not None and not df.empty:
-                # Find the price at or before current_time
-                mask = df['timestamp'] <= self.current_time
-                if mask.any():
-                    price = float(df.loc[mask, 'close'].iloc[-1])
-                    return price
-
-            # Fallback to loading data (should be rare)
-            logger.debug(f"Price data not preloaded for {symbol}, loading from disk...")
             df = self.data_manager.load_data_period(base_symbol, "15m", data_type, self.current_time, self.current_time + timedelta(minutes=15), load_from_class=True)
             if df is None or df.empty:
                 return None
@@ -216,24 +201,6 @@ class OMSClient:
             return price
         except Exception as e:
             logger.error(f"Error getting current {instrument_type} price for {symbol}: {e}")
-            return None
-
-    def _get_preloaded_price_data(self, symbol: str, data_type: str) -> Optional[pd.DataFrame]:
-        """Get preloaded price data from memory cache."""
-        try:
-            # Try different data stores based on type
-            if data_type == "mark_ohlcv_futures":
-                data_store = self.data_manager.perpetual_mark_ohlcv_data
-            elif data_type == "index_ohlcv_futures":
-                data_store = self.data_manager.perpetual_index_ohlcv_data
-            elif data_type == "ohlcv_spot":
-                data_store = self.data_manager.spot_ohlcv_data
-            else:
-                return None
-
-            df = data_store.get(symbol)
-            return df if df is not None and not df.empty else None
-        except Exception:
             return None
     
     def close_position(self, symbol: str, instrument_type: str):
