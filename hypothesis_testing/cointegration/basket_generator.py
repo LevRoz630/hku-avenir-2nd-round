@@ -56,7 +56,21 @@ def generate_baskets_clustering(price_data: pd.DataFrame, n_clusters: int = 5,
     """
     # Compute correlation matrix of log returns (more appropriate for multiplicative processes)
     # Log returns are statistically sound for financial time series that are multiplicative
+    # Ensure prices are positive before computing log returns
+    if np.any(price_data <= 0):
+        raise ValueError("Price data contains non-positive values. Cannot compute log returns.")
+    
     log_returns = np.log(price_data / price_data.shift(1)).dropna()
+    
+    # Validate log returns
+    if np.any(np.isnan(log_returns)) or np.any(np.isinf(log_returns)):
+        # Filter out columns with invalid returns
+        valid_cols = log_returns.columns[~np.any(np.isnan(log_returns) | np.isinf(log_returns), axis=0)]
+        if len(valid_cols) < 4:
+            raise ValueError("Too few valid symbols after filtering invalid log returns")
+        log_returns = log_returns[valid_cols]
+        price_data = price_data[valid_cols]
+    
     corr_matrix = log_returns.corr().values
     
     # Use clustering to find groups

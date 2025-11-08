@@ -64,33 +64,47 @@ def _compute_half_life_hurst(spread: np.ndarray) -> float:
         cumulative = np.cumsum(spread_centered)
 
         # R/S analysis for different window sizes
-        window_sizes = [int(len(spread) / i) for i in range(2, 6) if len(spread) / i > 10]
+        # Use more window sizes for better estimation, but ensure minimum size
+        min_window = max(10, len(spread) // 20)  # At least 5% of data
+        max_window = len(spread) // 2  # At most 50% of data
+        if max_window < min_window:
+            return np.inf
+        
+        # Generate window sizes logarithmically spaced
+        num_windows = min(8, max(3, int(np.log2(max_window / min_window)) + 1))
+        window_sizes = np.logspace(np.log2(min_window), np.log2(max_window), num_windows, base=2).astype(int)
+        window_sizes = np.unique(window_sizes)  # Remove duplicates
 
         rs_values = []
         for window in window_sizes:
             rs_window = []
-            for i in range(0, len(cumulative) - window, window):
+            # Use non-overlapping windows for R/S analysis
+            for i in range(0, len(cumulative) - window + 1, window):
                 segment = cumulative[i:i+window]
-                if len(segment) > 10:
+                if len(segment) >= min(10, window // 2):
                     R = np.max(segment) - np.min(segment)
-                    S = np.std(segment)
-                    if S > 0:
+                    S = np.std(segment, ddof=1)
+                    if S > 1e-10:  # Avoid division by very small numbers
                         rs_window.append(R / S)
-            if rs_window:
+            if len(rs_window) >= 2:  # Need at least 2 windows for reliable estimate
                 rs_values.append(np.mean(rs_window))
 
         if len(rs_values) >= 2:
             # Fit log-log regression to estimate Hurst exponent
             x = np.log(window_sizes[:len(rs_values)])
             y = np.log(rs_values)
-            slope = np.polyfit(x, y, 1)[0]
-            hurst = slope
+            if len(x) >= 2 and np.all(np.isfinite(x)) and np.all(np.isfinite(y)):
+                slope = np.polyfit(x, y, 1)[0]
+                hurst = slope
 
-            # For mean reverting series: half-life ≈ -ln(2)/(ln(autocorr))
-            # Using Hurst: if H < 0.5, mean reversion speed increases
-            if hurst < 0.5:
-                # Rough approximation: stronger mean reversion = shorter half-life
-                return max(1, int(50 * (0.5 - hurst) / 0.5))
+                # For mean reverting series (H < 0.5), estimate half-life
+                # Using autocorrelation-based approximation: half-life ≈ -ln(2) / ln(ρ)
+                # For Hurst H < 0.5, we approximate: stronger mean reversion (lower H) = shorter half-life
+                if hurst < 0.5:
+                    # More conservative formula: half-life increases exponentially as H approaches 0.5
+                    # For H=0.3: half-life ≈ 20 periods, for H=0.4: half-life ≈ 50 periods
+                    half_life = max(1, int(100 * (0.5 - hurst)))
+                    return half_life
     except:
         logger.debug("Error in half-life calculation")
 

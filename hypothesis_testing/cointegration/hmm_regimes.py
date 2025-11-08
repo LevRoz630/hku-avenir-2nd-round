@@ -228,18 +228,18 @@ def apply_regime_filter(
         return price_data.loc[idx].iloc[0:0], 0.0
 
     states = labels_df.loc[idx, state_cols]
-    include_states = set(include_states)
+    include_states_set = set(include_states)
 
     if policy == "all":
         mask = np.ones(len(idx), dtype=bool)
         for col in state_cols:
-            mask &= states[col].isin(include_states).values
+            mask &= states[col].isin(include_states_set).values
     elif policy == "any":
-        mask = states.isin(include_states).any(axis=1).values
+        mask = states.isin(include_states_set).any(axis=1).values
     elif policy == "k_of_n":
         if k is None:
             k = len(basket) - 1 if len(basket) > 1 else 1
-        mask = (states.isin(include_states).sum(axis=1) >= k).values
+        mask = (states.isin(include_states_set).sum(axis=1) >= k).values
     else:
         raise ValueError("policy must be one of {'all', 'any', 'k_of_n'}")
 
@@ -247,8 +247,9 @@ def apply_regime_filter(
     coverage = len(filtered_idx) / len(idx) if len(idx) else 0.0
 
     if coverage_threshold is not None and coverage < coverage_threshold:
-        # Fallback to unfiltered data (aligned index) when coverage is too low
-        return price_data.loc[idx], coverage
+        # If coverage is too low, return empty DataFrame to skip this basket
+        # Regime filtering is intentional - don't fall back to unfiltered data
+        return price_data.loc[idx].iloc[0:0], coverage
 
     if len(filtered_idx) == 0:
         return price_data.loc[idx].iloc[0:0], coverage

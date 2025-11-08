@@ -68,6 +68,12 @@ def _test_baskets_batch(args):
 
                 # Convert to log prices
                 log_prices = np.log(basket_prices)
+                
+                # Validate log prices after conversion (regime filtering may have left sparse data)
+                if np.any(np.isnan(log_prices)) or np.any(np.isinf(log_prices)):
+                    continue
+                if log_prices.shape[0] < len(basket) * 10:
+                    continue
 
                 # Run Johansen test
                 result = johansen_test(log_prices, p_value_threshold=0.01)
