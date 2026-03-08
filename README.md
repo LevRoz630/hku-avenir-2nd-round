@@ -1,6 +1,6 @@
 # HKU-Avenir Quantitative Trading Challenge -- Round 2
 
-Live trading phase of the HKU x Avenir Web3.0 Quantitative Trading Competition. Round 2 ran for 12 weeks on Binance perpetual futures. Our team advanced from Round 1.
+Live trading phase of the HKU x Avenir Web3.0 Quantitative Trading Competition. Round 2 ran for 12 weeks on Binance perpetual futures. Finished top 11 worldwide out of 1,171 participants across 200+ universities in 15 countries.
 
 ## What this repo contains
 
