@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-OMS-compatible simulation layer used by the backtester.
-Provides order/position operations (spot and perpetual), portfolio valuation,
-and a consistent interface for strategies to trade against historical data.
-"""
+"""OMS simulation layer for backtesting. Tracks positions, balances, and trade execution."""
 
 import pandas as pd
 import numpy as np
@@ -21,12 +17,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class OMSClient:
-    """Order Management System abstraction for backtests.
-
-    - Tracks balances and symbol positions
-    - Converts target USDT to quantity at current price
-    - Records trade history and realized PnL on close/flip
-    """
     
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
@@ -37,15 +27,12 @@ class OMSClient:
         self.data_manager = None  # Will be set by backtester
         
     def set_current_time(self, current_time: datetime):
-        """Set current backtest time"""
         self.current_time = current_time
 
     def set_data_manager(self, data_manager: HistoricalDataCollector):
-        """Set data manager"""
         self.data_manager = data_manager
 
     def _normalize_symbol(self, symbol: str) -> str:
-        """Map trading symbol to data key used by HistoricalDataManager."""
         return symbol.replace('-PERP', '')
     
     def get_position(self) -> List[Dict[str, Any]]:
@@ -76,9 +63,8 @@ class OMSClient:
                     })
         return positions
     
-    def set_target_position(self, symbol: str, instrument_type: str, 
+    def set_target_position(self, symbol: str, instrument_type: str,
                           target_value: float, position_side: str) -> Dict[str, Any]:
-        """Place/adjust a position using target USDT value; supports CLOSE to exit."""
         try:
             if instrument_type and instrument_type != "future":
                 raise ValueError(f"Unsupported instrument type: {instrument_type}")
@@ -89,20 +75,15 @@ class OMSClient:
             logger.error(f"Error setting target position: {e}")
  
     def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str) -> Dict[str, Any]:
-        """Set position using USDT amount; converts to quantity at current price"""
         current_price = self.get_current_price(symbol)
         if not current_price:
             raise ValueError(f"Unable to get current price for {symbol}")
 
-        # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
         if trade_value > self.balance['USDT']:
             raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
 
-        # Convert USDT → base-asset quantity at current mark/index price
         trade_qty = trade_value / current_price
-
-        # Ensure a position object exists for this symbol
         pos = self.positions.setdefault(symbol, {
             'quantity': 0.0,
             'value': 0.0,
@@ -116,9 +97,9 @@ class OMSClient:
         current_side = pos.get('side', 'LONG')
         current_entry_price = float(pos.get('entry_price', 0.0))
 
-        # Handle explicit close before side comparisons to avoid misrouting CLOSE
+        # Handle close
         if position_side == 'CLOSE':
-            # Explicit close: realize PnL and zero out the position
+            # Realize PnL and zero out
             pnl, principal = self.close_position(symbol)
             self.balance['USDT'] += (pnl or 0.0) + (principal or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
@@ -132,7 +113,6 @@ class OMSClient:
             }
 
         elif position_side == current_side:
-            # Add to an existing position on the same side, update VWAP entry_price
             self.balance['USDT'] -= trade_value
             new_qty = current_quantity + trade_qty
             self.positions[symbol] = {
@@ -147,7 +127,6 @@ class OMSClient:
             }
 
         elif position_side != current_side:
-            # Flip side: realize PnL on the old side, then open a fresh position
             pnl, principal = self.close_position(symbol)
             self.balance['USDT'] += (pnl or 0.0) + (principal or 0.0)
             self.balance['USDT'] -= trade_value
@@ -162,7 +141,7 @@ class OMSClient:
         else:
             raise ValueError(f"Invalid position side: {position_side}")
        
-        # Persist an immutable record of the action with post-trade state
+        # Record trade
         self.trade_history.append({
             'timestamp': self.current_time,
             'symbol': symbol,
@@ -177,10 +156,6 @@ class OMSClient:
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
     
     def get_current_price(self, symbol: str, instrument_type: str = None) -> Optional[float]:
-        """
-        Get current price using preloaded data for efficiency.
-        Falls back to loading if data not available.
-        """
         if not self.data_manager or not self.current_time:
             return None
 
@@ -188,16 +163,15 @@ class OMSClient:
             base_symbol = self._normalize_symbol(symbol)
             data_type = "mark_ohlcv_futures"
 
-            # Try to get from preloaded data first (much faster)
             df = self._get_preloaded_price_data(base_symbol, data_type)
             if df is not None and not df.empty:
                 # Ensure timestamps are properly normalized for comparison
                 if df['timestamp'].dt.tz is None:
-                    # If data is tz-naive, assume it's UTC
+                    # Assume UTC if tz-naive
                     df = df.copy()
                     df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
 
-                # Find the price at or before current_time
+                # Price at or before current_time
                 mask = df['timestamp'] <= self.current_time
                 if mask.any():
                     price = float(df.loc[mask, 'close'].iloc[-1])
@@ -205,7 +179,7 @@ class OMSClient:
                 else:
                     logger.debug(f"No data found for {base_symbol} at or before {self.current_time}. Data time range: {df['timestamp'].min()} to {df['timestamp'].max()}")
 
-            # Fallback to loading data
+            # Fallback: load from disk
             logger.debug(f"Loading price data for {symbol} ({base_symbol}) from disk")
             df = self.data_manager.load_data_period(base_symbol, "15m", data_type, self.current_time, self.current_time + timedelta(minutes=15), load_from_class=True)
             if df is None or df.empty:

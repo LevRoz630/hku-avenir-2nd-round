@@ -393,7 +393,7 @@ def main():
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=2, default=str)
     
-    print(f"\n✓ Results saved to {output_file}")
+    print(f"Results saved to {output_file}")
     print(f"  Optimized {len(optimization_results)} baskets")
 
 

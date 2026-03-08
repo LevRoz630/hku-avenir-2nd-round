@@ -1,36 +1,5 @@
 #!/usr/bin/env python3
-"""
-Historical Data Collection Module
-
-This module provides a comprehensive interface for collecting historical cryptocurrency
-market data from Binance using the CCXT library. It supports spot and perpetual
-futures markets with various data types including OHLCV, trades, funding rates, and
-open interest data.
-
-Classes
--------
-HistoricalDataCollector
-    Main class for collecting and managing historical cryptocurrency market data.
-
-Examples
---------
->>> from datetime import datetime, timedelta
->>> from hist_data import HistoricalDataCollector
->>> 
->>> # Initialize collector
->>> collector = HistoricalDataCollector(data_dir="./data")
->>> 
->>> # Collect spot OHLCV data
->>> start_time = datetime.now() - timedelta(days=7)
->>> spot_data = collector.collect_spot_ohlcv("BTC-USDT", "1h", start_time, export=True)
->>> 
->>> # Collect perpetual mark price data
->>> mark_data = collector.collect_perpetual_mark_ohlcv("ETH-USDT", "15m", start_time, export=True)
->>> 
->>> # Use wrapper function for multiple data types
->>> end_time = datetime.now()
->>> data = collector.load_data_period("BTC-USDT", "1h", "ohlcv_spot", start_time, end_time, export=True)
-"""
+"""Historical data collection from Binance via CCXT. Supports spot and perpetual futures OHLCV."""
 
 import pandas as pd
 import time

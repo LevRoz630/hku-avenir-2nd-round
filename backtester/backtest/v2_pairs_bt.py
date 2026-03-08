@@ -63,9 +63,9 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    logger.info(f"{'='*80}")
+    
     logger.info(f"Starting backtest run at {datetime.now(timezone.utc)}")
-    logger.info(f"{'='*80}")
+    
     
     # Configure pairs from the request
     pairs_config = [
@@ -121,27 +121,16 @@ def main():
         market_type="futures",
     )
     
-    logger.info(f"{'='*80}")
+    
     logger.info(f"Backtest completed. Log saved to: {log_file}")
-    logger.info(f"{'='*80}")
-    # backtester.print_results(results)
-    # backtester.save_results(results, "v1_pairs_bt")
+    
+
     backtester.plot_portfolio_value()
     backtester.plot_drawdown()
     backtester.plot_returns()
     backtester.plot_positions()
 
-    # results = backtester.run_permutation_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    #     permutations=100,
-    # )
-    # print("p_value:", results.get("p_value"))
-    # print("sharpes:", results.get("sharpes"))
+
 
 if __name__ == "__main__":
     main()

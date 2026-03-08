@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""
-Generate HMM regime labels for backtester visualization.
-
-This script creates regime data independently of the hypothesis testing pipeline,
-using price data from the backtester's data directory.
-"""
+"""Generate HMM regime labels from backtester price data."""
 
 import logging
 import sys
@@ -26,16 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_price_data_from_backtester(data_dir: Path, price_type: str = "mark") -> pd.DataFrame:
-    """
-    Load and combine price data from backtester data directory into wide format.
-
-    Args:
-        data_dir: Path to backtester data directory
-        price_type: "mark" or "index"
-
-    Returns:
-        DataFrame with columns like {SYMBOL}_close and DatetimeIndex
-    """
+    """Load price data into wide format with {SYMBOL}_close columns."""
     logger.info(f"Loading {price_type} price data from {data_dir}")
 
     # Find all parquet files for the specified price type

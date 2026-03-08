@@ -14,16 +14,6 @@ class PositionManager:
 
 
     def filter_orders(self, orders: List[Dict[str, Any]], oms_client: Any, data_manager: HistoricalDataCollector):
-        """
-        Pipeline to validate and weight raw strategy orders before sending to OMS.
-
-        Steps:
-        1) Risk screen via short-horizon volatility; orders over threshold get value=0.
-        2) Size remaining orders using inverse-vol weights under a USDT budget.
-        3) Enforce balance constraint; if sized orders exceed cash, reject the batch.
-
-        Returns a list of enriched order dicts or None if rejected.
-        """
         self.oms_client = oms_client
         self.data_manager = data_manager
         try:
@@ -51,13 +41,7 @@ class PositionManager:
         
 
     def _close_risky_orders(self, orders: List[Dict[str, Any]]):
-        """
-        Mark orders as value=0 when recent realized vol is above a threshold.
-
-        - Uses 4 hours of 15m mark OHLCV to compute scaled volatility
-          (std/mean). Current threshold: 0.1.
-        - Futures data is stored under base symbols; '-PERP' suffix is removed.
-        """
+        """Mark orders as value=0 when recent realized vol exceeds threshold."""
         cleaned: List[Dict[str, Any]] = []
         for order in orders:
             try:
@@ -88,13 +72,7 @@ class PositionManager:
 
 
     def _set_weights(self, orders: List[Dict[str, Any]]):
-            """
-            Size orders by inverse volatility under a budget cap.
-
-            - Budget: 10% of current USDT balance (conservative sizing).
-            - For each non-zero order, compute 1/scaled_vol over last 1 day of 15m data.
-            - Allocate proportionally to inverse-vol weights.
-            """
+            """Size orders by inverse volatility under a 10% budget cap."""
             # Work on a copy to avoid mutating the input list unexpectedly
             updated: List[Dict[str, Any]] = []
             limit = self.oms_client.balance['USDT'] / 10

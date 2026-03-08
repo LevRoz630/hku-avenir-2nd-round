@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    print("=" * 60)
     print("Testing Multiprocessing Permutation Backtest")
-    print("=" * 60)
     
     # Use a short time period and few permutations for quick testing
     hist_dir = Path(__file__).parent.parent.parent / "hku-data" / "test_data"

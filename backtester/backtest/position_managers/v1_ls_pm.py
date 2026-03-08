@@ -13,14 +13,6 @@ class V1LSPositionManager:
         ramp_up_days: int = 60,
         start_alloc_frac: float = 200.0,
     ):
-        """
-        Position manager with gradual allocation ramp-up.
-        
-        Args:
-            max_alloc_frac: Maximum allocation multiplier (default: 2000)
-            ramp_up_days: Days to reach max allocation (default: 60)
-            start_alloc_frac: Starting allocation multiplier (default: 200)
-        """
         self.orders = []
         self.oms_client = None
         self.data_manager = None
@@ -37,9 +29,7 @@ class V1LSPositionManager:
             self.start_time = oms_client.current_time
 
     def _red_button(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Red button to close positions due to 15% loss.
-        """
+        """Close positions with >15% unrealized loss."""
         try:
             current_positions = self.oms_client.get_position() or []
             for position in current_positions:

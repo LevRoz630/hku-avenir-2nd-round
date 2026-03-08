@@ -205,10 +205,7 @@ class BTCAltShortStrategy:
         if not (should_rebalance_daily or should_rebalance_ratio):
             return []  # No action needed
         
-        print(f"\n{'='*60}")
-        print(f"REBALANCING at {now}")
-        print(f"Reason: {'Daily' if should_rebalance_daily else 'Ratio drift >20%'}")
-        print(f"{'='*60}")
+        print(f"REBALANCING at {now} — {'Daily' if should_rebalance_daily else 'Ratio drift'}")
         
         # Calculate altcoin weights
         altcoin_weights = self._calculate_altcoin_weights()
@@ -258,6 +255,5 @@ class BTCAltShortStrategy:
         # updates the state
         self.last_rebalance_day = current_day
         
-        print(f"\nRebalance complete at {now}")
-        print(f"{'='*60}\n")
+        print(f"Rebalance complete at {now}")
         return orders

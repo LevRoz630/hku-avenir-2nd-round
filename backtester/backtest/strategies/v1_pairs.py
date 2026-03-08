@@ -183,27 +183,7 @@ class PairTradingStrategy:
                 all_orders.extend(orders)
             
             else:
-                # Hold - no orders for this pair
                 # Hold
                 continue
 
         return all_orders
-
-
-
-
-        for idx, cfg in enumerate(_PAIRS_CONFIG):
-            base_a, base_b = cfg['legs']
-            # Legs include -USDT already; append -PERP only for futures
-            self.pairs.append({
-                'pair_id': f"{base_a}_{base_b}",  # Unique identifier for the pair
-                'a_symbol': f"{base_a}-PERP",
-                'b_symbol': f"{base_b}-PERP",
-                'lookback_days': cfg.get('lookback_days', 7),
-                'entry_z': cfg.get('entry_z', 1.5),
-                'exit_z': cfg.get('exit_z', 0.5),
-                'max_alloc_frac': cfg.get('max_alloc_frac', 0.2),
-                'is_open': False,
-                'current_side': None,  # 'long_spread' or 'short_spread'
-                'last_beta': 1.0,
-            })

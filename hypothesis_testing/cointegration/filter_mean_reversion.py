@@ -17,27 +17,8 @@ def _compute_half_life(spread: np.ndarray) -> float:
     """
     Compute half-life using Hurst exponent for crypto spread mean reversion.
 
-    Hurst exponent (H) measures long-term memory and persistence:
-    - H < 0.5: mean reverting (good for pairs trading)
-    - H = 0.5: random walk (neutral)
-    - H > 0.5: trending/persistent (bad for pairs trading)
-
-    For crypto spreads, Hurst is more robust than OU process because:
-    - No assumptions about constant mean reversion speed
-    - Handles non-stationary volatility and structural breaks
-    - Measures true long-term persistence, not just short-term autocorrelation
-
-    Half-life derived from Hurst: stronger mean reversion (lower H) = shorter half-life
-
-    Parameters:
-    -----------
-    spread : np.ndarray, shape (T,)
-        Spread series
-
-    Returns:
-    --------
-    float
-        Half-life in periods (or np.inf if not mean reverting)
+    Hurst exponent H < 0.5 indicates mean reversion.
+    Returns half-life in periods, or np.inf if not mean reverting.
     """
     if len(spread) < 50:  # Need sufficient data for Hurst estimation
         return np.inf

@@ -46,9 +46,7 @@ def main():
     )
     backtester.print_results(results)
     
-    print("\n" + "="*60)
     print("Running permutation backtest with 50 permutations...")
-    print("="*60)
     perm_results = backtester.run_permutation_backtest(
         strategy=strategy,
         position_manager=position_manager,
@@ -59,9 +57,7 @@ def main():
         permutations=50,
     )
     
-    print("\n" + "="*60)
     print("PERMUTATION TEST RESULTS")
-    print("="*60)
     print(f"P-value: {perm_results.get('p_value', 'N/A'):.4f}")
     
     if perm_results.get('observed_results'):

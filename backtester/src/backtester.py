@@ -152,22 +152,6 @@ def _run_single_permutation_worker(args):
 
 class Backtester:
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
-        """High-level backtest runner coordinating data, strategy and OMS.
-
-        Performance Optimizations:
-        - Cached price lookups to avoid repeated disk I/O
-        - Reduced logging frequency (progress every 10% instead of every iteration)
-        - Position exposure snapshots every 10 iterations instead of every timestep
-        - Progress reporting with completion percentage
-
-        Responsibilities:
-        - Ensure historical data availability and push into the collector cache
-        - Iterate the clock, ask strategy for orders, run Position Manager filters
-        - Send sized orders to OMS and track portfolio metrics
-
-        Automatically sets up OMSClient and HistoricalDataCollector.
-        Strategy and Position Manager are passed as an argument to run_backtest (strategy, position_manager)
-        """
         self.data_manager = HistoricalDataCollector(historical_data_dir)
         self.oms_client = OMSClient(historical_data_dir=historical_data_dir)
         self.historical_data_dir = historical_data_dir
@@ -198,7 +182,6 @@ class Backtester:
         self.price_cache = {}
 
     def get_cached_price(self, symbol: str, timestamp: datetime, instrument_type: str = None) -> float:
-        """Get cached price or fetch and cache it."""
         instrument_type = instrument_type or 'future'
         cache_key = f"{symbol}_{instrument_type}_{timestamp.isoformat()}"
 
@@ -222,7 +205,6 @@ class Backtester:
         return price
 
     def _update_portfolio_value_cached(self) -> float:
-        """Update portfolio value using cached prices for better performance."""
         if not self.oms_client:
             return 0.0
 
@@ -262,37 +244,15 @@ class Backtester:
                         end_date: datetime = None,
                         time_step: timedelta = None,
                         market_type: str = None) -> Dict[str, Any]:
-        # Store the originally requested dates for regime filtering
         self.requested_backtest_start = start_date
         self.requested_backtest_end = end_date
-        """
-        Execute a strategy over historical data and return performance.
-
-        - Ensures data exists (downloads if missing)
-        - Loads data into memory via HistoricalDataCollector
-        - Aligns start_time to first available candle
-        - Iterates time, lets strategy place orders via OMSClient
-        - Aggregates portfolio values and computes metrics
-
-        Args:
-            strategy: Instantiated strategy object (must expose `symbols` and `lookback_days`)
-            position_manager: Instantiated position manager object
-            start_date: Start datetime (aligned to earliest available data if earlier)
-            end_date: End datetime
-            time_step: Time delta between backtest iterations (maps to data timeframe)
-            market_type: "spot" or "futures"; futures loop uses index OHLCV and mark for execution
-        Returns:
-            Results dict with PnL series and summary metrics
-        """
         try:
             self.position_manager = position_manager
 
 
 
             symbols = strategy.symbols
-            # Ensure historical data exists for requested symbols; download if missing
             data_path = Path(self.historical_data_dir)
-            # Extract base symbols by removing both -USDT and -PERP suffixes
             base_symbols = [s.replace('-PERP', '').replace('-USDT', '') for s in symbols]
             data_path.mkdir(parents=True, exist_ok=True)
 
@@ -307,7 +267,7 @@ class Backtester:
             logger.error(f"Error in run_backtest: {e}")
             return None
 
-        # Preload ALL data that will be needed during backtest execution
+        # Preload data
         extended_end_date = end_date + timedelta(days=1)
         required_data = []
 
@@ -341,7 +301,7 @@ class Backtester:
                 logger.error(f"Error preloading {data_type} data for {sym}: {e}")
                 continue
 
-        # Align start time to earliest available data so prices exist at t0
+        # Align start time to earliest available data
         earliest_ts = None
         for sym in base_symbols:
             stores_to_check = [
@@ -376,36 +336,25 @@ class Backtester:
         if aligned_start.tzinfo is None:
             aligned_start = aligned_start.tz_localize('UTC')
 
-        # Define start and end times for the strategy
         strategy.start_time = aligned_start
         strategy.end_time = end_date
 
-        # Set the time for data fetching and orders that will be updated as strategy progresses
         self.oms_client.set_current_time(strategy.start_time)
         self.oms_client.set_data_manager(self.data_manager)
 
-        # Reset per-run histories and caches
         self.position_exposures_history = []
-        self.price_cache.clear()  # Clear price cache for fresh backtest
-
-        # Run backtest
+        self.price_cache.clear()
         iteration = 0
         total_iterations = int((end_date - aligned_start) / time_step) + 1
         logger.info(f"Starting backtest with ~{total_iterations} iterations")
 
         while self.oms_client.current_time <= end_date:
             try:
-                # Revalue portfolio at the current timestamp (with price caching)
                 total_value = self._update_portfolio_value_cached()
                 self.portfolio_values.append(total_value)
 
-                # Get current orders from strategy
                 orders = strategy.run_strategy(oms_client=self.oms_client, data_manager=self.data_manager)
-
-                # Filter orders through position manager
                 filtered_orders = self.position_manager.filter_orders(orders=orders, oms_client=self.oms_client, data_manager=self.data_manager)
-
-                # Execute filtered orders
                 if filtered_orders is not None:
                     for order in filtered_orders:
                         try:
@@ -419,11 +368,11 @@ class Backtester:
                             logger.error(f"Error setting target position: {e}")
                             continue
 
-                # Log at every iteration: time, portfolio value, and current orders
+                # Log
                 current_time = self.oms_client.current_time.strftime('%Y-%m-%d %H:%M:%S')
                 logger.info(f"{current_time} | Portfolio: ${total_value:.2f}")
 
-                # Format and display current orders if any
+                # Format orders
                 if filtered_orders and len(filtered_orders) > 0:
                     try:
                         orders_data = []
@@ -441,13 +390,12 @@ class Backtester:
                     except Exception as e:
                         logger.debug(f"Could not format orders table: {e}")
 
-                # Snapshot signed notional exposures less frequently (every 10 iterations)
+                # Snapshot exposures every 10 iterations
                 if iteration % 10 == 0:
                     try:
                         exposures = {}
                         current_time = self.oms_client.current_time
                         for symbol, pos in self.oms_client.positions.items():
-                            # Use cached price for better performance
                             current_price = self.get_cached_price(symbol, current_time, 'future')
                             if not current_price:
                                 continue
@@ -463,7 +411,6 @@ class Backtester:
                     except Exception as e:
                         logger.debug(f"Error snapshotting exposures: {e}")
 
-                # Move to next time step
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 iteration += 1
                     
@@ -472,14 +419,11 @@ class Backtester:
                 self.oms_client.set_current_time(self.oms_client.current_time + time_step)
                 continue
 
-        logger.info("Backtest completed successfully!")
+        logger.info("Backtest complete")
 
-        # Calculate final performance metrics
         self.calculate_performance_metrics()
-        # Get final portfolio value
         final_portfolio_value = self.portfolio_values[-1] if self.portfolio_values else self.oms_client.balance['USDT']
 
-        # Return results
         results = {
             'total_return': (self.portfolio_values[-1] / self.portfolio_values[0] - 1) if self.portfolio_values else 0,
             'returns': self.returns,
@@ -689,11 +633,8 @@ class Backtester:
         return args_dict
 
     def calculate_performance_metrics(self):
-        """Calculate performance metrics"""
         if len(self.portfolio_values) < 2:
             return
-            
-        # Calculate period returns (based on time_step granularity)
         self.returns = []
         for i in range(1, len(self.portfolio_values)):
             prev = self.portfolio_values[i-1]
@@ -701,7 +642,7 @@ class Backtester:
             if prev > 0:
                 self.returns.append((curr - prev) / prev)
         
-        # Calculate max drawdown and store drawdown series
+        # Max drawdown
         peak = self.portfolio_values[0]
         self.max_drawdown = 0
         self.drawdowns = []
@@ -713,7 +654,7 @@ class Backtester:
             if drawdown > self.max_drawdown:
                 self.max_drawdown = drawdown
         
-        # Calculate Sharpe ratio (use period returns; assume 24 periods/day for 1h)
+        # Sharpe ratio
         if self.returns:
             mean_return = np.mean(self.returns)
             std_return = np.std(self.returns)
@@ -721,7 +662,6 @@ class Backtester:
                 self.sharpe_ratio = mean_return / std_return
     
     def plot_portfolio_value(self):
-        """Plot backtest results"""
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             y=self.portfolio_values,
@@ -739,7 +679,6 @@ class Backtester:
         fig.show()
 
     def plot_drawdown(self):
-        """Plot drawdown"""
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             y=self.drawdowns,
@@ -757,7 +696,6 @@ class Backtester:
         fig.show()
 
     def plot_returns(self):
-        """Plot returns"""
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             y=self.returns,
@@ -775,7 +713,6 @@ class Backtester:
         fig.show()
     
     def plot_positions(self):
-        """Plot signed notional exposures by symbol over time as a heatmap."""
         if not self.position_exposures_history:
             return
         # Build DataFrame: rows=time, cols=symbols, values=signed notional
@@ -804,7 +741,6 @@ class Backtester:
         fig.show()
 
     def load_regime_data(self, regime_labels_path: str = None):
-        """Generate HMM regime labels for visualization from current backtest data."""
         if regime_labels_path is None:
             # Default path based on hypothesis testing artifacts
             repo_root = Path(__file__).parent.parent.parent
@@ -817,7 +753,6 @@ class Backtester:
             return False
 
     def _generate_regime_data(self, output_path: Path) -> bool:
-        """Generate HMM regime labels from backtester's loaded data."""
         try:
             # Add hypothesis testing path for imports
             sys.path.append(str(Path(__file__).parent.parent.parent / "hypothesis_testing" / "cointegration"))
@@ -885,7 +820,6 @@ class Backtester:
             return False
 
     def plot_regimes(self):
-        """Plot HMM regime states over time as a heatmap."""
         if self.regime_data is None or self.regime_data.empty:
             return  # Silently skip if no regime data available
 
@@ -951,8 +885,6 @@ class Backtester:
         fig.show()
 
     def save_results(self, results: Dict[str, Any], filename: str):
-        """Save backtest results"""
-        # Convert non-serializable fields (e.g., datetimes) in trade_history
         serializable = dict(results)
         try:
             serializable['trade_history'] = [
@@ -965,20 +897,14 @@ class Backtester:
             json.dump(serializable, f)
 
     def print_results(self, results: Dict[str, Any]):
-        """Print backtest results in a formatted way"""
-        print("\n" + "="*50)
-        print("BACKTEST RESULTS")
-        print("="*50)
-        print(f"Total Return: {results['total_return']:.2%}")
+        print(f"\nTotal Return: {results['total_return']:.2%}")
         print(f"Max Drawdown: {results['max_drawdown']:.2%}")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Portfolio Value: ${results['final_portfolio_value']:.2f}")
         print(f"Cash Balance: {results['final_balance']}")
-        print(f"Number of Trades: {len(results['trade_history'])}")
-        print("="*50)
+        print(f"Trades: {len(results['trade_history'])}")
 
 
-    # Derive timeframe string from time_step for consistent collection/loading
     def _time_step_to_timeframe(self, ts: timedelta) -> str:
         if ts is None:
             raise ValueError("Time step is None")

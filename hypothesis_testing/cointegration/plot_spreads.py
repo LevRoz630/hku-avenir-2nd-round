@@ -24,18 +24,6 @@ from hypothesis_testing.cointegration.data_split import split_data_chronological
 
 
 def plot_spread_on_test_data(basket_data, test_data, basket_idx):
-    """
-    Plot spread over time on test data.
-    
-    Parameters:
-    -----------
-    basket_data : Dict
-        Basket data from JSON with 'basket' and 'eigenvector' keys
-    test_data : pd.DataFrame
-        Test data with timestamp index and {symbol}_close columns
-    basket_idx : int
-        Index of basket for title
-    """
     basket = basket_data['basket']
     eigenvector = np.array(basket_data['eigenvector'])
     
@@ -177,7 +165,7 @@ def main():
         print(f"Basket {i+1}/{len(baskets)}: {', '.join(basket_data['basket'])}")
         plot_spread_on_test_data(basket_data, test_data, i)
     
-    print(f"\n✓ All plots saved to {output_dir}")
+    print(f"All plots saved to {output_dir}")
 
 
 if __name__ == "__main__":

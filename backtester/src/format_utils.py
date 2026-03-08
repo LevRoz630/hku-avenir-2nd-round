@@ -1,17 +1,9 @@
-"""
-Formatting helpers for logging tables in CLI/console.
-"""
+"""Formatting helpers for logging tables."""
 
 from typing import Any, Dict, List
 
 
 def format_table(headers: List[str], rows: List[List[Any]]) -> str:
-    """Return a simple ASCII table string.
-
-    Args:
-        headers: Column names
-        rows: List of row lists
-    """
     if not rows:
         return "(empty)"
     widths = [len(str(h)) for h in headers]
@@ -28,7 +20,6 @@ def format_table(headers: List[str], rows: List[List[Any]]) -> str:
 
 
 def format_positions_table(positions: List[Dict[str, Any]]) -> str:
-    """Format OMS positions list into an ASCII table."""
     rows: List[List[str]] = []
     for p in positions or []:
         inst = p.get('instrument_name') or p.get('symbol') or 'N/A'
@@ -53,7 +44,6 @@ def format_positions_table(positions: List[Dict[str, Any]]) -> str:
 
 
 def format_balances_table(balances: Dict[str, Any]) -> str:
-    """Format balances dict into an ASCII table."""
     rows: List[List[str]] = []
     for asset, bal in (balances or {}).items():
         try:
@@ -66,7 +56,6 @@ def format_balances_table(balances: Dict[str, Any]) -> str:
 
 
 def format_target_elements(elements: List[Dict[str, Any]]) -> str:
-    """Format a list of target position instructions for logging."""
     rows: List[List[str]] = []
     for e in elements or []:
         rows.append([
@@ -79,10 +68,6 @@ def format_target_elements(elements: List[Dict[str, Any]]) -> str:
 
 
 def format_batch_result(result: Any) -> str:
-    """Format batch API result (dict or list) into a table.
-
-    Tries to extract common fields like id, instrument_name, type, side, value, times.
-    """
     if result is None:
         return "(empty)"
     items: List[Dict[str, Any]]

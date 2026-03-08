@@ -13,16 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def plot_spread_analysis(best_basket: Dict, price_data: pd.DataFrame) -> None:
-    """
-    Plot spread series and z-scores.
-    
-    Parameters:
-    -----------
-    best_basket : Dict
-        Best basket result dictionary
-    price_data : pd.DataFrame
-        Price data with timestamp index
-    """
+
     spread = best_basket['spread']
     timestamps = price_data.index[:len(spread)]
     
@@ -75,14 +66,7 @@ def plot_spread_analysis(best_basket: Dict, price_data: pd.DataFrame) -> None:
 
 
 def plot_lookback_optimization(best_basket: Dict) -> None:
-    """
-    Plot lookback window optimization results.
-    
-    Parameters:
-    -----------
-    best_basket : Dict
-        Best basket result dictionary with 'lookback_results'
-    """
+
     if 'lookback_results' not in best_basket:
         return
     
@@ -128,19 +112,11 @@ def plot_lookback_optimization(best_basket: Dict) -> None:
 
 
 def print_summary_statistics(best_basket: Dict) -> None:
-    """
-    Print summary statistics for the best basket.
-    
-    Parameters:
-    -----------
-    best_basket : Dict
-        Best basket result dictionary
-    """
+
     spread = best_basket['spread']
     
-    print("\n" + "="*60)
     print("SUMMARY STATISTICS")
-    print("="*60)
+
     print(f"Best Basket: {', '.join(best_basket['basket'])}")
     print(f"Basket Size: {len(best_basket['basket'])}")
     print(f"\nCointegration Test:")
@@ -164,5 +140,5 @@ def print_summary_statistics(best_basket: Dict) -> None:
     eigenvector = best_basket['eigenvector']
     for i, sym in enumerate(best_basket['basket']):
         print(f"  {sym}: {eigenvector[i]:.6f}")
-    print("="*60)
+
 

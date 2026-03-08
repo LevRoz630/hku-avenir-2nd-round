@@ -3,24 +3,7 @@ import pandas as pd
 
 # Helper methods with documentation
 def _convert_symbol_to_ccxt(symbol: str, market_type: str = "spot"):
-    """
-    Convert trading symbol format for CCXT API calls.
-    
-    Parameters
-    ----------
-    symbol : str
-        Trading symbol in standard format (e.g., "BTC-USDT", "ETH-USDT-PERP")
-    market_type : str, optional
-        Market type: "spot" or "future". Default is "spot".
-    
-    Returns
-    -------
-    str or None
-        Converted symbol format for CCXT API calls.
-        For spot: "BTC-USDT" -> "BTC/USDT"
-        For futures: "BTC-USDT-PERP" -> "BTC/USDT:USDT"
-        Returns None if conversion fails.
-    """
+    """Convert symbol to CCXT format (spot: BTC/USDT, futures: BTC/USDT:USDT)."""
     try:
         if market_type == "spot":
             # For spot: BTC-USDT -> BTC/USDT
@@ -71,42 +54,12 @@ def _is_utc(dt: datetime) -> None:
 
 
 def _get_number_of_periods(timeframe: str, start_time: datetime, end_time: datetime):
-    """
-    Calculate the number of periods between two datetime objects for a given timeframe.
-    
-    Parameters
-    ----------
-    timeframe : str
-        Timeframe string (e.g., '1m', '5m', '15m', '1h', '1d')
-    start_time : datetime
-        Start datetime
-    end_time : datetime
-        End datetime
-    
-    Returns
-    -------
-    int
-        Number of periods between start_time and end_time
-    """
     minutes = _get_timeframe_to_minutes(timeframe)
     total_minutes = (end_time - start_time).total_seconds() / 60
     total_periods = int(total_minutes // minutes)
     return total_periods
 
-def _get_timeframe_to_minutes( timeframe: str):
-    """
-    Convert timeframe string to minutes.
-    
-    Parameters
-    ----------
-    timeframe : str
-        Timeframe string (e.g., '1m', '5m', '15m', '1h', '1d')
-    
-    Returns
-    -------
-    int
-        Number of minutes for the timeframe. Defaults to 15 if timeframe not recognized.
-    """
+def _get_timeframe_to_minutes(timeframe: str):
     periods_map = {
         '1m': 1, '5m': 5, '15m': 15, '30m': 30,
         '1h': 60, '2h': 120, '4h': 240, '6h': 360,

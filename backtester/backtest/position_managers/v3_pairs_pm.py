@@ -9,17 +9,6 @@ from pypfopt import risk_models, expected_returns, EfficientFrontier
 
 logger = logging.getLogger(__name__)
 class PositionManager:
-    """
-    Pair-level position manager for pairs trading with rebalancing.
-
-    Manages risk at the pair level, not individual symbols:
-    1. Groups orders by pair_id
-    2. Uses pyportfolioopt for max Sharpe ratio optimization
-    3. Allocates capital to pairs based on risk-adjusted strategy returns
-    4. Sizes each pair's legs using beta to ensure net beta neutrality
-    5. Rebalances existing positions to optimal allocations
-    6. Uses fixed max_total_allocation for all pairs
-    """
     
     def __init__(self,
                  risk_method: str = 'max_sharpe',
@@ -54,27 +43,13 @@ class PositionManager:
     def filter_orders(self, orders: List[Dict[str, Any]], 
                      oms_client: OMSClient, 
                      data_manager: HistoricalDataCollector) -> Optional[List[Dict[str, Any]]]:
-        """
-        Main entry point for filtering and sizing orders with rebalancing.
-        
-        Steps:
-        1. Separate CLOSE orders (strategy CLOSE takes precedence)
-        2. Get existing positions and map to pairs
-        3. Build pair registry from orders if not already built
-        4. Filter out repeated signals for pairs with existing positions (unless rebalancing needed)
-        5. Calculate optimal allocations for ALL pairs (existing + new orders)
-        6. Calculate current allocations for existing pairs
-        7. Generate rebalancing orders if drift exceeds threshold
-        8. Size new orders based on optimal allocations
-        9. Return all orders (close + rebalance + new)
-        """
         self.oms_client = oms_client
         self.data_manager = data_manager
         
         # Log timestamp and incoming orders
-        logger.info(f"\n{'='*80}")
+        
         logger.info(f"POSITION MANAGER - Timestamp: {oms_client.current_time}")
-        logger.info(f"{'='*80}")
+        
         logger.info(f"Incoming orders: {len(orders)} total")
         
         try:
@@ -242,7 +217,7 @@ class PositionManager:
             logger.info(f"    - REBALANCE: {len(rebalance_orders)}")
             logger.info(f"    - NEW TRADES: {len(sized_new_orders)}")
             logger.info(f"    - BASKET ORDERS: {len(sized_basket_orders)}")
-            logger.info(f"{'='*80}\n")
+            
             
             return final_orders
             

@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 def main():
     """Main function to run complete backtest analysis"""
     print("Crypto Trading Strategy Backtester")
-    print("=" * 50)
     
     # Resolve data dir at repo root
     hist_dir = Path(__file__).parents[2] / "historical_data"
