@@ -137,6 +137,7 @@ historical_data/
 *.xls
 
 # IDE
+.cursor/
 .vscode/
 .idea/
 *.swp
